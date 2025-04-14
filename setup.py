@@ -4,6 +4,8 @@ setup(
     name='VecTank',
     version='0.1.0',
     description='軽量で高速なインメモリベクトルデータベースライブラリ',
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     author='satorunnlg',
     author_email='satorunnlg@gmail.com',
     packages=find_packages(),
