@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
     name='VecTank',
     version='0.1.0',
-    description='軽量で高速なベクトルデータベースライブラリ',
+    description='軽量で高速なインメモリベクトルデータベースライブラリ',
     author='satorunnlg',
     author_email='satorunnlg@gmail.com',
     packages=find_packages(),
