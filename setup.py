@@ -8,7 +8,7 @@ setup(
     long_description_content_type="text/markdown",
     author='satorunnlg',
     author_email='satorunnlg@gmail.com',
-    url="https://github.com/satorunnlg/VecTank.git"
+    url="https://github.com/satorunnlg/VecTank.git",
     packages=find_packages(),
     install_requires=[
         'numpy',
