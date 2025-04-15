@@ -1,7 +1,7 @@
 # VecTank
 
-VecTank は、軽量で高速なベクトル検索を実現するベクトルデータベースライブラリです。  
-内部実装は NumPy を活用しており、大量のベクトルデータの追加、検索、更新、削除、永続化を効率的に行うことができます。また、複数のテーブル（コレクション）を管理でき、用途に合わせた設定が可能です。
+VecTank は、軽量で高速なベクトル検索を実現するライブラリです。  
+内部実装は NumPy を活用しており、大量のベクトルデータの追加、検索、更新、削除、永続化を効率的に行うことができます。また、複数のタンク（コレクション）を管理でき、用途に合わせた設定が可能です。
 
 ---
 
@@ -11,9 +11,9 @@ VecTank は、軽量で高速なベクトル検索を実現するベクトルデ
   - NumPy の一括演算による計算で、リアルタイム検索を実現。
   - 内積、コサイン類似度、ユークリッド距離など複数の類似度計算方式に対応。
 
-- **柔軟なテーブル管理**  
-  - `VectorTable` クラスにより、各テーブルごとに次元数、データ型、デフォルトの計算方式を個別に設定可能。
-  - `VectorDB` クラスで複数のテーブルを一元管理できます。
+- **柔軟なタンク管理**  
+  - `VectorTank` クラスにより、各タンクごとに次元数、データ型、デフォルトの計算方式を個別に設定可能。
+  - `VectorStore` クラスで複数のタンクを一元管理できます。
 
 - **データ永続化機能**  
   - ベクトルデータは `.npz` 形式、メタデータは `pickle` 形式で保存。
@@ -21,7 +21,7 @@ VecTank は、軽量で高速なベクトル検索を実現するベクトルデ
 
 - **サーバ／クライアント通信**  
   - `multiprocessing.managers.BaseManager` を使用し、同一ホスト内でのプロセス間通信を実現。
-  - サーバ（`VectorDBServer`）とクライアント（`VectorDBClient`）でシンプルな API 呼び出しが可能です。
+  - サーバ（`TankServer`）とクライアント（`TankClient`）でシンプルな API 呼び出しが可能です。
 
 - **コマンドラインインターフェース (CLI)**  
   - インストール後、`vectank-run` コマンドで VecTank サーバを簡単に起動できます。
@@ -75,31 +75,31 @@ vectank-run --port 50000 --authkey secret --save-file vectank_data
 - `--authkey`: 認証キー (デフォルト: "secret")
 - `--save-file`: ベクトルデータおよびメタデータの保存用ファイルのプレフィックス (デフォルト: "vectank_data")
 
-このサーバは起動時にデフォルトテーブル "default" を自動生成（例: 1200 次元、`float32`、コサイン類似度）します。
+このサーバは起動時にデフォルトタンク "default" を自動生成（例: 1200 次元、`float32`、コサイン類似度）します。
 
 ### 2. クライアントからの利用
 
-クライアント側では、`VectorDBClient` クラスを利用してサーバに接続できます。たとえば、以下のコード例をご参照ください。
+クライアント側では、`TankClient` クラスを利用してサーバに接続できます。たとえば、以下のコード例をご参照ください。
 
 ```python
-from vectank.client import VectorDBClient
+from vectank.client import TankClient
 from vectank.core import VectorSimMethod
 import numpy as np
 
 # サーバに接続
-client = VectorDBClient()
+client = TankClient()
 
-# "default" テーブルを取得
-table = client.get_table("default")
+# "default" タンクを取得
+tank = client.get_tank("default")
 
 # 1200 次元の乱数ベクトルを生成して追加
 vector = np.random.rand(1200).astype(np.float32)
 metadata = {"name": "サンプルベクトル"}
-key = table.add_vector(vector, metadata)
+key = tank.add_vector(vector, metadata)
 print(f"追加したベクトルのキー: {key}")
 
 # クエリベクトルによる検索（上位 5 件を取得）
-results = table.search(vector, top_k=5)
+results = tank.search(vector, top_k=5)
 for res in results:
     print(res)
 ```
@@ -126,17 +126,17 @@ VecTank/
 ├── vectank/           # ライブラリ本体
 │   ├── __init__.py    # パッケージエントリポイント（公開 API の定義）
 │   ├── core.py        # 類似度計算方式（Enum、計算関数、SIM_METHODS）
-│   ├── table.py       # VectorTable クラス（ベクトルの追加、検索、更新、削除、永続化）
-│   ├── db.py          # VectorDB クラス（複数テーブル管理）
-│   ├── server.py      # VectorDBServer クラス（サーバ起動機能）
-│   └── client.py      # VectorDBClient クラス（クライアント用 API）
+│   ├── tank.py        # VectorTank クラス（ベクトルの追加、検索、更新、削除、永続化）
+│   ├── store.py       # VectorStore クラス（複数タンク管理）
+│   ├── server.py      # TankServer クラス（サーバ起動機能）
+│   └── client.py      # TankClient クラス（クライアント用 API）
 ├── vectank/cli.py     # コマンドライン起動用のスクリプト（entry_point: vectank-run）
 ├── examples/          # 利用例・サンプルスクリプト
 │   ├── run_server.py  # サーバ起動用スクリプト
 │   └── sample_benchmark.py # 登録・検索パフォーマンス計測用スクリプト
 ├── tests/             # テストコード（unittest/pytest）
-│   ├── test_table.py
-│   ├── test_db.py
+│   ├── test_tank.py
+│   ├── test_store.py
 │   ├── test_server.py
 │   └── test_client.py
 ├── README.md          # このファイル
@@ -157,7 +157,7 @@ VecTank は MIT License の下で公開されています。
 
 ご意見・ご質問、バグ報告、または機能改善の提案などは、GitHub の [Issue](https://github.com/yourusername/VecTank/issues) をご利用ください。  
 プルリクエストも歓迎します。  
-VecTank を通じて、より効率的なベクトルデータ管理と検索が実現できることを願っています！
+VecTank を通じて、より効率的なベクトル管理と検索が実現できることを願っています！
 
 ---
 
