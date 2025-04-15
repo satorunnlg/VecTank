@@ -1,7 +1,7 @@
 # VecTank
 
-[![Build Status](https://github.com/yourusername/VecTank/workflows/CI/badge.svg)](https://github.com/yourusername/VecTank/actions)
-[![Coverage Status](https://coveralls.io/repos/github/yourusername/VecTank/badge.svg?branch=main)](https://coveralls.io/github/yourusername/VecTank?branch=main)
+[![Build Status](https://github.com/satorunnlg/VecTank/workflows/CI/badge.svg)](https://github.com/satorunnlg/VecTank/actions)
+[![Coverage Status](https://coveralls.io/repos/github/satorunnlg/VecTank/badge.svg?branch=main)](https://coveralls.io/github/satorunnlg/VecTank?branch=main)
 [![PyPI version](https://badge.fury.io/py/VecTank.svg)](https://badge.fury.io/py/VecTank)
 
 VecTank は、軽量で高速なベクトル検索を実現するライブラリです。  
@@ -118,6 +118,40 @@ for res in results:
 ```bash
 python examples/sample_benchmark.py
 ```
+
+### 4. テストの実行
+
+VecTank では、unittest を利用したテストスイートが用意されています。  
+以下のコマンドで、全テストケースを詳細表示（verbose モード）で実行できます。
+
+```bash
+python -m unittest discover -v
+```
+
+テスト結果は標準出力に表示され、必要に応じて出力をファイルにリダイレクトすることも可能です。
+
+例:
+
+```bash
+python -m unittest discover -v > test_results.txt 2>&1
+```
+
+### 4. テストの実行 (pytest)
+
+VecTank では、pytest を利用したテスト実行も可能です。  
+以下のコマンドで、全テストケースを実行できます。
+
+```bash
+pytest --maxfail=1 --disable-warnings -q
+```
+
+また、JUnit 形式の XML レポートを生成する場合は、次のように実行します。
+
+```bash
+pytest --junitxml=report.xml
+```
+
+出力された report.xml には、各テストケースの詳細な結果が記録されるので、CI/CD や解析に利用できます。
 
 ---
 
