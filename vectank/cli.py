@@ -1,5 +1,6 @@
 # vectank/cli.py
 import argparse  # コマンドライン引数の解析用ライブラリ
+import os          # ファイル存在チェック用のライブラリ
 from vectank.server import TankServer  # サーバ機能の実装クラス (旧 VectorDBServer) をインポート
 from vectank.core import VectorSimMethod  # 類似度計算方法の Enum をインポート
 import numpy as np  # 数値計算ライブラリ
@@ -45,16 +46,26 @@ def main():
         save_file=args.save_file
     )
 
-    # サーバ起動時にデフォルトタンクを作成
+    # サーバ起動時にデフォルトタンク "default" を作成
     # タンク名は "default"、ベクトルの次元数は 1200、
     # 類似度計算にはコサイン類似度 (COSINE) を使用し、
     # データ型は numpy の float32 を指定しています
-    server.store.create_tank(
+    default_tank = server.store.create_tank(
         "default", 
         dim=1200, 
         default_sim_method=VectorSimMethod.COSINE, 
         dtype=np.float32
     )
+
+    # 永続化ファイルが存在する場合、デフォルトタンクのデータを読み込みます。
+    # ここでは、ファイル名の規則として、"{save_file}_default_meta.pkl" と "{save_file}_default_vectors.npz" を用いています。
+    default_meta_file = f"{args.save_file}_default_meta.pkl"
+    default_vectors_file = f"{args.save_file}_default_vectors.npz"
+    if os.path.exists(default_meta_file) and os.path.exists(default_vectors_file):
+        print("永続化ファイルが見つかりました。データを読み込みます...")
+        default_tank.load_from_file()
+    else:
+        print("永続化ファイルが見つかりません。新規作成します。")
 
     # サーバを起動する
     # このメソッドはブロッキング呼び出しとなり、サーバが停止するまで実行が継続します
