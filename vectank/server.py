@@ -1,12 +1,31 @@
 # vectank/server.py
 
-from .store import VectorStore  # VectorStore クラスをインポートし、ストア（タンク管理機能）の操作を実現
-from .core import VectorSimMethod  # 類似度計算方法の Enum をインポート
-from multiprocessing.managers import BaseManager  # リモートオブジェクトへのアクセスを可能とする BaseManager をインポート
+import logging
+import socketserver
+from multiprocessing.managers import BaseManager
+from .store import VectorStore  # タンク管理機能を提供する VectorStore クラスをインポート
+from .core import VectorSimMethod  # 類似度計算方式 Enum をインポート
 
-# StoreManager クラスは BaseManager を継承し、リモートアクセス用の管理クラスとして定義します。
-class StoreManager(BaseManager):
-    pass  # カスタムな振る舞いは特になく、基本機能のみ利用
+# カスタム TCP サーバクラス（アドレス再利用を許可）:
+class LoggingTCPServer(socketserver.TCPServer):
+    allow_reuse_address = True
+    def verify_request(self, request, client_address):
+        logging.info(f"Accepted connection from {client_address}")
+        return super().verify_request(request, client_address)
+
+# LoggingStoreManager は BaseManager を継承し、内部サーバクラスを LoggingTCPServer に置き換えます。
+class LoggingStoreManager(BaseManager):
+    pass
+
+# BaseManager で使用される内部サーバを LoggingTCPServer に変更
+LoggingStoreManager._Server = LoggingTCPServer
+
+# get_store() の呼び出し時に操作ログを出力するためのラッパー関数
+def get_store_wrapper(store):
+    def wrapped_get_store():
+        logging.info("Remote operation: get_store() が呼び出されました。")
+        return store
+    return wrapped_get_store
 
 # TankServer クラスは、VecTank サーバーを起動してリモートからのストア操作を提供します。
 class TankServer:
@@ -24,38 +43,31 @@ class TankServer:
           port (int): 指定されたポート番号
           authkey (bytes): 指定された認証キー
         """
-        # VectorStore のインスタンスを生成。save_file が指定されていれば永続化用に利用
+        # VectorStore のインスタンスを生成。save_file が指定されれば永続化に利用
         self.store = VectorStore(save_file=save_file)
-        # ポート番号を設定
         self.port = port
-        # 認証用のバイト型キーを設定
         self.authkey = authkey
 
     def run(self):
         """
-        サーバーを起動し、リモートクライアントからの接続を待ち受けます。
+        サーバーを起動し、リモートクライアントからの接続と操作要求を待ち受けます。
         
         処理内容:
-          - StoreManager に get_store 関数を登録して、リモート側からストアオブジェクトを取得可能にします。
-          - 指定されたポートと認証キーでサーバーを開始し、永久に接続を待ち受けます。
-          - KeyboardInterrupt が発生した場合、各タンクのデータを保存して終了します。
+          - LoggingStoreManager に、リモート呼び出し時に操作ログを出力する
+            get_store() ラッパーを登録します。
+          - 指定されたポートと認証キーでサーバーを起動し、
+            永久に接続要求を待ち受けます。
+          - KeyboardInterrupt 発生時、各タンクのデータを保存して終了します。
         """
-        # StoreManager に 'get_store' 名で、現在の VectorStore インスタンスを返す関数を登録
-        StoreManager.register('get_store', callable=lambda: self.store)
-        # 指定されたアドレス（空文字は全てのインターフェースでのバインドを意味する）とポート番号、
-        # 認証キーを用いて StoreManager のインスタンスを生成
-        manager = StoreManager(address=('', self.port), authkey=self.authkey)
-        # サーバーオブジェクトを生成（serve_forever メソッドで接続待ち状態に入る）
+        # get_store() 呼び出し時に操作ログを出力するラッパー関数で登録
+        LoggingStoreManager.register('get_store', callable=get_store_wrapper(self.store))
+        manager = LoggingStoreManager(address=('', self.port), authkey=self.authkey)
         server = manager.get_server()
-        # サーバー起動のメッセージを表示
-        print(f"VecTank サーバがポート {self.port} で起動中です。")
+        logging.info(f"VecTank サーバがポート {self.port} で起動中です。")
         try:
-            # サーバーを永久に起動。クライアントからの接続要求を処理します。
             server.serve_forever()
         except KeyboardInterrupt:
-            # ユーザーによる割り込み（Ctrl+C 等）でサーバー停止した場合の処理
-            print("サーバ停止前に各タンクを保存中...")
-            # データ永続化のため、全タンクの save_to_file メソッドを呼び出し、ファイルに保存する
+            logging.info("サーバ停止前に各タンクを保存中...")
             for tank in self.store.tanks.values():
                 tank.save_to_file()
-            print("データ保存完了。")
+            logging.info("データ保存完了。")
