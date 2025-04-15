@@ -2,8 +2,9 @@ from setuptools import setup, find_packages
 
 setup(
     name='VecTank',
-    version='0.1.4',
-    description='軽量で高速なインメモリベクトルデータベースライブラリ',
+    use_scm_version=True,
+    setup_requires=['setuptools_scm'],
+    description='軽量で高速なインメモリベクトル検索およびタンク操作ライブラリ',
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
     author='satorunnlg',
