@@ -1,7 +1,7 @@
 # vectank/__init__.py
 from .core import VectorSimMethod, SIM_METHODS
-from .table import VectorTable
-from .db import VectorDB
+from .tank import VectorTable
+from .store import VectorDB
 from .server import VectorDBServer
 from .client import VectorDBClient
 

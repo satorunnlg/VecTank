@@ -1,7 +1,7 @@
 # tests/test_table.py
 import unittest
 import numpy as np
-from vectank.table import VectorTable
+from vectank.tank import VectorTable
 from vectank.core import VectorSimMethod
 
 class TestVectorTable(unittest.TestCase):

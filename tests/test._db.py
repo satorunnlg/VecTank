@@ -1,6 +1,6 @@
 # tests/test_db.py
 import unittest
-from vectank.db import VectorDB
+from vectank.store import VectorDB
 from vectank.core import VectorSimMethod
 import numpy as np
 

@@ -1,11 +1,11 @@
 # vectank/cli.py
 import argparse  # コマンドライン引数の解析用ライブラリ
-from vectank.server import VectorDBServer  # サーバ機能の実装クラスをインポート
+from vectank.server import TankServer  # サーバ機能の実装クラス (旧 VectorDBServer) をインポート
 from vectank.core import VectorSimMethod  # 類似度計算方法の Enum をインポート
 import numpy as np  # 数値計算ライブラリ
 
 def main():
-    # argparse を利用してコマンドラインからの引数を解析するパーサーを作成
+    # argparse を利用してコマンドライン引数を解析するパーサーを作成
     parser = argparse.ArgumentParser(
         description="VecTank サーバを起動します。"
     )
@@ -37,19 +37,19 @@ def main():
     # コマンドライン引数の解析を実行し、結果を args に格納
     args = parser.parse_args()
 
-    # コマンドライン引数の値を利用して VecTank サーバのインスタンスを作成
+    # コマンドライン引数の値を利用して TankServer のインスタンスを作成
     # authkey はバイト型が必要なため、文字列から変換しています
-    server = VectorDBServer(
+    server = TankServer(
         port=args.port, 
         authkey=args.authkey.encode(), 
         save_file=args.save_file
     )
 
-    # サーバ起動時にデフォルトテーブルを作成
-    # テーブル名は "default"、ベクトルの次元数は 1200、
+    # サーバ起動時にデフォルトタンクを作成
+    # タンク名は "default"、ベクトルの次元数は 1200、
     # 類似度計算にはコサイン類似度 (COSINE) を使用し、
     # データ型は numpy の float32 を指定しています
-    server.db.create_table(
+    server.store.create_tank(
         "default", 
         dim=1200, 
         default_sim_method=VectorSimMethod.COSINE, 
