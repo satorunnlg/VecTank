@@ -1,6 +1,6 @@
 # VecTank
 
-[![Build Status](https://github.com/satorunnlg/VecTank/workflows/pypi-publish.yml/badge.svg)](https://github.com/satorunnlg/VecTank/actions)
+[![Build Status](https://github.com/satorunnlg/VecTank/actions/workflows/pypi-publish.yml/badge.svg)](https://github.com/satorunnlg/VecTank/actions)
 [![Coverage Status](https://coveralls.io/repos/github/satorunnlg/VecTank/badge.svg?branch=main)](https://coveralls.io/github/satorunnlg/VecTank?branch=main)
 [![PyPI version](https://badge.fury.io/py/VecTank.svg)](https://badge.fury.io/py/VecTank)
 
