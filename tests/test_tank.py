@@ -9,7 +9,8 @@ class TestVectorTank(unittest.TestCase):
     def setUp(self):
         """
         各テストケース実行前に、VectorTank インスタンスを初期化します。
-        タンク名は "test"、ベクトルの次元数は 5、類似度計算方式は COSINE、データ型は np.float32 を使用。
+        タンク名は "test"、ベクトルの次元数は 5、類似度計算方式は COSINE、
+        データ型は np.float32 を使用します。
         """
         self.tank = VectorTank("test", 5, VectorSimMethod.COSINE, np.float32)
 
@@ -17,7 +18,7 @@ class TestVectorTank(unittest.TestCase):
         """
         単一のベクトル追加と検索を検証するテストです。
         ・5次元のベクトルをタンクに追加し、返されたキーが文字列であることを確認。
-        ・同じベクトルを検索し、返される検索結果の件数とキーが正しいことを検証します。
+        ・同じベクトルを検索し、返される検索結果の件数、キー、及びベクトルが正しいことを検証します。
         """
         vector = np.array([1, 2, 3, 4, 5], dtype=np.float32)
         key = self.tank.add_vector(vector, {"test": "data"})
@@ -26,8 +27,9 @@ class TestVectorTank(unittest.TestCase):
         # 同一のベクトルをクエリとして検索
         results = self.tank.search(vector, top_k=1)
         self.assertEqual(len(results), 1, "検索結果は1件であるべきです。")
-        result_key, score, metadata = results[0]
+        result_key, score, result_vector, result_metadata = results[0]
         self.assertEqual(result_key, key, "検索結果のキーは追加されたベクトルのキーと一致しなければなりません。")
+        self.assertTrue(np.allclose(result_vector, vector), "検索結果のベクトルは追加したベクトルと一致する必要があります。")
 
     def test_add_vectors_bulk(self):
         """
@@ -58,9 +60,10 @@ class TestVectorTank(unittest.TestCase):
         # 更新後、クエリとして new_vector を指定して検索
         results = self.tank.search(new_vector, top_k=1)
         self.assertGreater(len(results), 0, "更新後の検索結果は1件以上である必要があります。")
-        found_key, score, metadata = results[0]
+        found_key, score, result_vector, result_metadata = results[0]
         self.assertEqual(found_key, key, "更新されたベクトルのキーが一致する必要があります。")
-        self.assertEqual(metadata.get("info"), "updated", "更新されたメタデータが反映されている必要があります。")
+        self.assertTrue(np.allclose(result_vector, new_vector), "更新されたベクトルが反映されている必要があります。")
+        self.assertEqual(result_metadata.get("info"), "updated", "更新されたメタデータが反映されている必要があります。")
 
     def test_delete_vector(self):
         """
@@ -131,7 +134,6 @@ class TestVectorTank(unittest.TestCase):
         
         # 残存するキーが検索結果に含まれていないことを確認
         for key in keys_to_delete:
-            # 検索結果全体から削除されたキーが見つからないことを検証
             results = self.tank.search(np.ones(dim, dtype=np.float32), top_k=10)
             result_keys = [res[0] for res in results]
             self.assertNotIn(key, result_keys, f"削除されたキー {key} は検索結果に含まれてはいけません。")

@@ -1,15 +1,15 @@
 # vectank/tank.py
 import numpy as np  # 数値計算ライブラリ NumPy をインポート
-import threading  # 複数のスレッドからの同時アクセスを防ぐためのロック機構を提供
-import pickle  # オブジェクトの永続化（シリアライズ／デシリアライズ）に利用
-import os       # ファイルやパスの操作に利用
+import threading    # 複数のスレッドからの同時アクセスを防ぐためのロック機構を提供
+import pickle       # オブジェクトの永続化（シリアライズ／デシリアライズ）に利用
+import os           # ファイルやパスの操作に利用
 from .core import VectorSimMethod, SIM_METHODS  # 類似度計算方法の Enum と、各計算関数の辞書をインポート
 
 # VectorTank クラスは、ベクトルとそれに紐付くメタデータを管理するタンクを表現します。
 class VectorTank:
     def __init__(self, tank_name: str, dim: int,
                  default_sim_method: VectorSimMethod,
-                 dtype: np.dtype, save_file: str = None):
+                 dtype: np.dtype, persist: bool = False, file_path: str = None):
         # タンク名
         self.tank_name = tank_name
         # ベクトルの次元数
@@ -18,8 +18,16 @@ class VectorTank:
         self.default_sim_method = default_sim_method
         # ベクトルを格納する際のデータ型 (例: numpy.float32)
         self.dtype = dtype
-        # データ永続化に使用するファイル名またはパス（オプション）
-        self.save_file = save_file
+        # 永続化フラグが True の場合、永続化対象タンクとみなす
+        self.persist = persist
+        if self.persist:
+            if file_path is None:
+                # file_path が指定されなければ、カレントディレクトリに tank_name をプレフィックスとして利用
+                self.persist_prefix = os.path.join(os.getcwd(), self.tank_name)
+            else:
+                self.persist_prefix = file_path
+        else:
+            self.persist_prefix = None
 
         # スレッド間の排他制御用ロック
         self._lock = threading.Lock()
@@ -32,6 +40,10 @@ class VectorTank:
         # 自動採番用のID。キーが指定されない場合に利用
         self._auto_id = 0
 
+        # 永続化フラグが有効な場合、コンストラクタで自動的に既存ファイルの読み込みを試みる
+        if self.persist:
+            self.load_from_file()
+    
     def __getstate__(self):
         """
         オブジェクトのシリアライズ時に呼び出される。
@@ -166,7 +178,7 @@ class VectorTank:
           sim_method (オプション): 利用する類似度計算方法 (指定しなければデフォルトを利用)
 
         戻り値:
-          (キー, 類似度スコア, メタデータ) のタプルのリスト
+          (キー, 類似度スコア, ベクトル, メタデータ) のタプルのリスト
 
         例外:
           - クエリベクトルの次元が一致しなかった場合、ValueError を送出
@@ -201,11 +213,11 @@ class VectorTank:
             # インデックスからキーへの変換用辞書を作成
             index_to_key = {index: k for k, index in self._key_to_index.items()}
             results = []
-            # 上位結果からキー、スコア、メタデータを抽出
+            # 上位結果からキー、スコア、メタデータ、ベクトルを抽出
             for idx in top_indices:
                 key = index_to_key.get(idx)
                 if key is not None:
-                    results.append((key, float(scores[idx]), self._metadata.get(key)))
+                    results.append((key, float(scores[idx]), self._vectors[idx], self._metadata.get(key)))
             return results
 
     def update_vector(self, key: str, new_vector: np.ndarray, new_metadata: dict = None):
@@ -261,7 +273,6 @@ class VectorTank:
                         if all(meta.get(k) == v for k, v in conditions.items())]
             else:
                 raise TypeError("conditions には辞書または callable を指定してください。")
-
 
     def delete(self, key: str):
         """
@@ -345,13 +356,13 @@ class VectorTank:
           - ベクトル情報は NumPy の npz 形式で保存
           - メタデータ、キー、採番カウンタは pickle 形式で保存
           
-        ※ save_file が指定されていない場合は何も行わない。
+        ※ persist フラグが False の場合は何も行わない。
         """
-        if self.save_file is None:
+        if not self.persist:
             return
         with self._lock:
-            # 保存ファイル名をタンク名と連結して決定
-            vectors_file = f"{self.save_file}_{self.tank_name}_vectors.npz"
+            # 保存ファイル名は persist_prefix と tank_name を連結して決定
+            vectors_file = f"{self.persist_prefix}_{self.tank_name}_vectors.npz"
             # NumPy 形式でベクトル群を保存
             np.savez(vectors_file, vectors=self._vectors)
             # メタデータ関連情報をまとめた辞書を作成
@@ -360,23 +371,23 @@ class VectorTank:
                 "key_to_index": self._key_to_index,
                 "auto_id": self._auto_id
             }
-            meta_file = f"{self.save_file}_{self.tank_name}_meta.pkl"
+            meta_file = f"{self.persist_prefix}_{self.tank_name}_meta.pkl"
             # pickle を利用してメタデータを保存
             with open(meta_file, "wb") as f:
                 pickle.dump(meta_data, f)
 
     def load_from_file(self):
         """
-        永続化ファイルから、ベクトルとメタデータをロードする。
+        永続化フラグが有効な場合、既存の永続化ファイルから、ベクトルとメタデータをロードする。
 
         処理内容:
           - 該当するベクトルファイルとメタデータファイルが存在するか確認し、
             存在する場合にそれらを読み込む。
         """
-        if self.save_file is None:
+        if not self.persist:
             return
-        vectors_file = f"{self.save_file}_{self.tank_name}_vectors.npz"
-        meta_file = f"{self.save_file}_{self.tank_name}_meta.pkl"
+        vectors_file = f"{self.persist_prefix}_{self.tank_name}_vectors.npz"
+        meta_file = f"{self.persist_prefix}_{self.tank_name}_meta.pkl"
         # 両方のファイルが存在しなければ何もしない
         if not os.path.exists(vectors_file) or not os.path.exists(meta_file):
             return

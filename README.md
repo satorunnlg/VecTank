@@ -70,16 +70,16 @@ VecTank は CLI 経由でサーバを簡単に起動する機能を提供しま�
 インストール後、以下のコマンドでサーバを起動できます。
 
 ```bash
-vectank-run --port 50000 --authkey secret --save-file vectank_data
+vectank-run --port 50000 --authkey secret
 ```
 
 コマンドラインオプション:
 
 - `--port`: サーバのポート番号 (デフォルト: 50000)
 - `--authkey`: 認証キー (デフォルト: "secret")
-- `--save-file`: ベクトルデータおよびメタデータの保存用ファイルのプレフィックス (デフォルト: "vectank_data")
 
-このサーバは起動時にデフォルトタンク "default" を自動生成（例: 1200 次元、`float32`、コサイン類似度）します。
+このサーバは起動時に default タンクは自動生成しません。  
+必要に応じたタンクはサーバ起動後に作成してください.
 
 ### 2. クライアントからの利用
 
