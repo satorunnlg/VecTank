@@ -171,4 +171,7 @@ cython_debug/
 .pypirc
 
 
-
+# Tank file
+*.pkl
+*.npz
+report.xml

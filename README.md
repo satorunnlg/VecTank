@@ -1,5 +1,9 @@
 # VecTank
 
+[![Build Status](https://github.com/yourusername/VecTank/workflows/CI/badge.svg)](https://github.com/yourusername/VecTank/actions)
+[![Coverage Status](https://coveralls.io/repos/github/yourusername/VecTank/badge.svg?branch=main)](https://coveralls.io/github/yourusername/VecTank?branch=main)
+[![PyPI version](https://badge.fury.io/py/VecTank.svg)](https://badge.fury.io/py/VecTank)
+
 VecTank は、軽量で高速なベクトル検索を実現するライブラリです。  
 内部実装は NumPy を活用しており、大量のベクトルデータの追加、検索、更新、削除、永続化を効率的に行うことができます。また、複数のタンク（コレクション）を管理でき、用途に合わせた設定が可能です。
 
