@@ -50,6 +50,11 @@ class VectorTank:
         self.__dict__.update(state)
         self._lock = threading.Lock()
 
+    def __len__(self):
+        """テーブルに登録されている全データ件数を返す。"""
+        with self._lock:
+            return len(self._metadata)
+
     def _generate_key(self) -> str:
         """
         新しいベクトル追加時に、自動採番で一意なキーを生成する。
@@ -228,6 +233,36 @@ class VectorTank:
             if new_metadata is not None:
                 self._metadata[key] = new_metadata
 
+    def filter_by_metadata(self, conditions=None) -> list:
+        """
+        メタデータに基づいてキーをフィルタリングします。
+
+        パラメータ conditions には以下のいずれかを指定できます:
+         - 辞書形式の場合:
+             各 metadata の値が、辞書に記載されたキーと一致する場合に True と判断します。
+             例: {"map_file": "room-layout.svg"} なら metadata["map_file"] == "room-layout.svg" をチェック。
+         - コールバック関数の場合:
+             条件判定用の関数を渡すと、各 metadata をその関数に渡して True を返すアイテムをフィルタします。
+             例: lambda meta: meta.get("score", 0) >= 50
+
+        :param conditions: 辞書 または callable を指定
+        :return: 条件に合致するアイテムのキーのリスト
+        :raises TypeError: conditions が辞書でもコールバックでもない場合
+        """
+        with self._lock:
+            if conditions is None:
+                return []
+            if callable(conditions):
+                # コールバック関数として評価
+                return [key for key, meta in self._metadata.items() if conditions(meta)]
+            elif isinstance(conditions, dict):
+                # 辞書に基づく単純等価比較
+                return [key for key, meta in self._metadata.items()
+                        if all(meta.get(k) == v for k, v in conditions.items())]
+            else:
+                raise TypeError("conditions には辞書または callable を指定してください。")
+
+
     def delete(self, key: str):
         """
         指定されたキーに対応するベクトルとそのメタデータを削除する。
@@ -253,6 +288,41 @@ class VectorTank:
             for new_index, existing_key in enumerate(self._key_to_index.keys()):
                 new_mapping[existing_key] = new_index
             self._key_to_index = new_mapping
+
+    def delete_keys(self, keys: list) -> list:
+        """
+        渡されたキー一覧に対して、一括で削除を実施します。
+        _vectors から該当行をまとめて削除し、_metadata および _key_to_index の状態を再構築します。
+        
+        :param keys: 削除対象のキーのリスト
+        :return: 実際に削除されたキーのリスト
+        """
+        with self._lock:
+            # 有効なキーのみ抽出
+            valid_keys = [key for key in keys if key in self._metadata]
+            if not valid_keys:
+                return []
+            
+            # 削除する各キーに対応するインデックスを取得
+            indices_to_delete = [self._key_to_index[key] for key in valid_keys]
+            # 削除時にインデックスのずれが起こらないよう、降順にソート
+            sorted_indices = sorted(indices_to_delete, reverse=True)
+            
+            # np.delete を使って _vectors から該当行を一括削除
+            self._vectors = np.delete(self._vectors, sorted_indices, axis=0)
+            
+            # _metadata と _key_to_index から対象キーを削除
+            for key in valid_keys:
+                del self._metadata[key]
+                del self._key_to_index[key]
+            
+            # 残ったアイテムの順序が _vectors の行順と合致するよう、_key_to_index を再構築
+            new_mapping = {}
+            for new_index, key in enumerate(list(self._key_to_index.keys())):
+                new_mapping[key] = new_index
+            self._key_to_index = new_mapping
+            
+            return valid_keys
 
     def clear(self):
         """

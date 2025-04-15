@@ -96,5 +96,52 @@ class TestVectorTank(unittest.TestCase):
         self.assertEqual(len(self.tank._metadata), 0, "タンク内のメタデータはクリアされている必要があります。")
         self.assertEqual(len(self.tank._key_to_index), 0, "キーとインデックスの対応情報はクリアされている必要があります。")
 
+    def test_delete_vector_exception(self):
+        """
+        存在しないキーで delete() を呼び出した場合、KeyError が送出されることを検証します。
+        """
+        with self.assertRaises(KeyError):
+            self.tank.delete("nonexistent_key")
+
+    def test_update_vector_exception(self):
+        """
+        存在しないキーで update_vector() を呼び出した場合、KeyError が送出されることを検証します。
+        """
+        new_vector = np.array([5, 4, 3, 2, 1], dtype=np.float32)
+        with self.assertRaises(KeyError):
+            self.tank.update_vector("nonexistent_key", new_vector, {"info": "updated"})
+
+    def test_delete_keys_bulk(self):
+        """
+        delete_keys() の一括削除機能を検証します。
+        ・複数のベクトルを追加した後、delete_keys() を利用して一括削除を行い、
+          削除されたキーのリストが正しく返され、タンクから削除されていることを確認します。
+        """
+        # 複数ベクトルの一括追加
+        num_vectors = 5
+        dim = 5
+        vectors = np.random.rand(num_vectors, dim).astype(np.float32)
+        metadata_list = [{"id": i} for i in range(num_vectors)]
+        keys = self.tank.add_vectors(vectors, metadata_list)
+        
+        # 一部のキーを一括削除
+        keys_to_delete = keys[1:4]
+        deleted_keys = self.tank.delete_keys(keys_to_delete)
+        self.assertEqual(set(deleted_keys), set(keys_to_delete), "削除されたキーは指定した一覧と一致する必要があります。")
+        
+        # 残存するキーが検索結果に含まれていないことを確認
+        for key in keys_to_delete:
+            # 検索結果全体から削除されたキーが見つからないことを検証
+            results = self.tank.search(np.ones(dim, dtype=np.float32), top_k=10)
+            result_keys = [res[0] for res in results]
+            self.assertNotIn(key, result_keys, f"削除されたキー {key} は検索結果に含まれてはいけません。")
+
+    def test_delete_keys_empty(self):
+        """
+        存在しないキーを渡した場合、delete_keys() が空のリストを返すことを検証します。
+        """
+        deleted_keys = self.tank.delete_keys(["nonexistent1", "nonexistent2"])
+        self.assertEqual(deleted_keys, [], "存在しないキーの場合、空のリストが返される必要があります。")
+
 if __name__ == '__main__':
     unittest.main()
