@@ -5,6 +5,7 @@
 # 1. defaultタンクの作成と取得 (create_tank/get_tank)
 # 2. 単一ベクトルの追加 (add_vector)
 # 3. 類似度検索機能 (search)
+# 4. 永続化フラグの検証 (create_tank_with_persistence)
 #
 # TankClient はリモートストアに接続し、タンク操作（タンクの作成、取得、ベクトルの追加、検索）
 # を行うためのクライアントAPIです。
@@ -13,6 +14,7 @@ import unittest
 from vectank.client import TankClient  # 旧 VectorDBClient → TankClient に名称統一
 from vectank.core import VectorSimMethod
 import numpy as np
+import os
 
 class TestTankClient(unittest.TestCase):
     def setUp(self):
@@ -70,6 +72,15 @@ class TestTankClient(unittest.TestCase):
         # search の戻り値は (key, score, vector, metadata) となっているので、4要素でアンパック
         result_key, score, result_vector, result_metadata = results[0]
         self.assertEqual(result_key, key, "The most similar vector's key should match the added vector's key.")
+
+    def test_create_tank_with_persistence(self):
+        """
+        永続化フラグが True の場合、タンクの永続化用パスがサーバ起動時の store_dir（未指定の場合はカレントディレクトリ）に基づいて設定されることを検証します。
+        """
+        # "persistent_test" タンクを persist=True で作成
+        persistent_tank = self.client.create_tank("persistent_test", 1200, VectorSimMethod.COSINE, np.float32, persist=True)
+        expected_path = os.path.join(os.getcwd(), "persistent_test")
+        self.assertEqual(persistent_tank.persistence_path, expected_path, "永続化パスが正しく設定されている必要があります。")
 
 if __name__ == '__main__':
     unittest.main()

@@ -1,29 +1,29 @@
 # vectank/store.py
 
+import os
 from .tank import VectorTank  # VectorTank クラスをインポートし、タンク管理機能を利用します。
 from .core import VectorSimMethod  # 類似度計算方法の Enum をインポートします。
 import numpy as np  # 数値計算ライブラリ NumPy をインポート
 
 class VectorStore:
-    def __init__(self, save_file: str = None):
+    def __init__(self, store_dir: str = None):
         """
         コンストラクタ
 
         引数:
-          save_file (str): オプション。データ永続化に使用するファイル名またはパス。
-
+          store_dir (str): オプション。データ永続化に使用するディレクトリ。
+                           指定がなければカレントディレクトリを利用します。
         内部状態:
           tanks (dict): 各タンク名と対応する VectorTank オブジェクトを管理する辞書。
-          save_file (str): 引数で指定された永続化用ファイル名またはパス。
+          store_dir (str): 永続化に利用するディレクトリ。
         """
-        # タンクを管理するための辞書。キー: タンク名, 値: VectorTank オブジェクト
         self.tanks = {}
-        # 永続化に利用するファイル名またはパスを保持
-        self.save_file = save_file
+        self.store_dir = store_dir if store_dir is not None else os.getcwd()
 
     def create_tank(self, tank_name: str, dim: int,
                     default_sim_method: VectorSimMethod,
-                    dtype: np.dtype):
+                    dtype: np.dtype,
+                    persist: bool = False):
         """
         新しいタンクを作成し、ストアに登録します。
 
@@ -32,6 +32,7 @@ class VectorStore:
           dim (int): タンク内の各ベクトルの次元数
           default_sim_method (VectorSimMethod): デフォルトの類似度計算方法
           dtype (np.dtype): 保存するベクトルのデータ型 (例: numpy.float32)
+          persist (bool, オプション): 永続化を有効にするかどうか (デフォルト: False)
 
         戻り値:
           作成された VectorTank オブジェクト
@@ -42,8 +43,15 @@ class VectorStore:
         # 同名のタンクが既に存在するかチェック
         if tank_name in self.tanks:
             raise ValueError(f"タンク {tank_name} は既に存在します。")
+        # persist が True の場合、store_dir の下にタンク名でファイル出力するパスを指定
+        if persist:
+            if not os.path.exists(self.store_dir):
+                os.makedirs(self.store_dir)
+            persistence_path = os.path.join(self.store_dir, tank_name)
+        else:
+            persistence_path = None
         # 新しい VectorTank オブジェクトを作成
-        tank = VectorTank(tank_name, dim, default_sim_method, dtype, self.save_file)
+        tank = VectorTank(tank_name, dim, default_sim_method, dtype, persist, persistence_path)
         # 作成したタンクを内部の辞書に登録
         self.tanks[tank_name] = tank
         # 作成したタンクオブジェクトを返す
@@ -59,10 +67,8 @@ class VectorStore:
         戻り値:
           対応する VectorTank オブジェクト。存在しない場合は None を返します。
         """
-        # タンクが存在するかチェック
         if tank_name not in self.tanks:
             return None
-        # 存在するタンクを返す
         return self.tanks[tank_name]
 
     def drop_tank(self, tank_name: str):
@@ -76,7 +82,6 @@ class VectorStore:
           タンクが存在する場合は、内部管理辞書から削除します。
         """
         if tank_name in self.tanks:
-            # 辞書からタンクを削除
             del self.tanks[tank_name]
 
     def list_tanks(self):

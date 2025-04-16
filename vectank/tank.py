@@ -10,37 +10,24 @@ class VectorTank:
     def __init__(self, tank_name: str, dim: int,
                  default_sim_method: VectorSimMethod,
                  dtype: np.dtype, persist: bool = False, file_path: str = None):
-        # タンク名
         self.tank_name = tank_name
-        # ベクトルの次元数
         self.dim = dim
-        # デフォルトで利用する類似度計算方法 (Enum で指定)
         self.default_sim_method = default_sim_method
-        # ベクトルを格納する際のデータ型 (例: numpy.float32)
         self.dtype = dtype
-        # 永続化フラグが True の場合、永続化対象タンクとみなす
         self.persist = persist
         if self.persist:
             if file_path is None:
-                # file_path が指定されなければ、カレントディレクトリに tank_name をプレフィックスとして利用
-                self.persist_prefix = os.path.join(os.getcwd(), self.tank_name)
+                self.persistence_path = os.path.join(os.getcwd(), self.tank_name)
             else:
-                self.persist_prefix = file_path
+                self.persistence_path = file_path
         else:
-            self.persist_prefix = None
-
-        # スレッド間の排他制御用ロック
+            self.persistence_path = None
         self._lock = threading.Lock()
-        # 初期状態のベクトル群。要素数 0 の NumPy 配列を生成
         self._vectors = np.empty((0, dim), dtype=dtype)
-        # 各キーに対応するメタデータを格納する辞書
         self._metadata = {}
-        # キーから配列内のインデックスへの対応を保持する辞書
         self._key_to_index = {}
-        # 自動採番用のID。キーが指定されない場合に利用
         self._auto_id = 0
 
-        # 永続化フラグが有効な場合、コンストラクタで自動的に既存ファイルの読み込みを試みる
         if self.persist:
             self.load_from_file()
     
@@ -361,8 +348,8 @@ class VectorTank:
         if not self.persist:
             return
         with self._lock:
-            # 保存ファイル名は persist_prefix と tank_name を連結して決定
-            vectors_file = f"{self.persist_prefix}_{self.tank_name}_vectors.npz"
+            # 保存ファイル名は persistence_path と tank_name を連結して決定
+            vectors_file = f"{self.persistence_path}_{self.tank_name}_vectors.npz"
             # NumPy 形式でベクトル群を保存
             np.savez(vectors_file, vectors=self._vectors)
             # メタデータ関連情報をまとめた辞書を作成
@@ -371,7 +358,7 @@ class VectorTank:
                 "key_to_index": self._key_to_index,
                 "auto_id": self._auto_id
             }
-            meta_file = f"{self.persist_prefix}_{self.tank_name}_meta.pkl"
+            meta_file = f"{self.persistence_path}_{self.tank_name}_meta.pkl"
             # pickle を利用してメタデータを保存
             with open(meta_file, "wb") as f:
                 pickle.dump(meta_data, f)
@@ -386,8 +373,8 @@ class VectorTank:
         """
         if not self.persist:
             return
-        vectors_file = f"{self.persist_prefix}_{self.tank_name}_vectors.npz"
-        meta_file = f"{self.persist_prefix}_{self.tank_name}_meta.pkl"
+        vectors_file = f"{self.persistence_path}_{self.tank_name}_vectors.npz"
+        meta_file = f"{self.persistence_path}_{self.tank_name}_meta.pkl"
         # 両方のファイルが存在しなければ何もしない
         if not os.path.exists(vectors_file) or not os.path.exists(meta_file):
             return

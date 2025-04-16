@@ -42,7 +42,7 @@ class TankClient:
         """
         return self.store.get_tank(tank_name)
 
-    def create_tank(self, tank_name: str, dim: int, default_sim_method: VectorSimMethod, dtype):
+    def create_tank(self, tank_name: str, dim: int, default_sim_method: VectorSimMethod, dtype, persist: bool = False):
         """
         リモートストアに新しいタンクを作成します。
 
@@ -51,8 +51,9 @@ class TankClient:
           dim (int): タンク内のベクトルの次元数
           default_sim_method (VectorSimMethod): デフォルトの類似度計算方法
           dtype: 保存するベクトルのデータ型 (例: numpy.float32)
+          persist (bool): タンクを永続化するかどうか (デフォルトは False)
 
         戻り値:
           作成されたタンクオブジェクトまたは作成結果
         """
-        return self.store.create_tank(tank_name, dim, default_sim_method, dtype)
+        return self.store.create_tank(tank_name, dim, default_sim_method, dtype, persist)

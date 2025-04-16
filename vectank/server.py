@@ -29,22 +29,17 @@ def get_store_wrapper(store):
 
 # TankServer クラスは、VecTank サーバーを起動してリモートからのストア操作を提供します。
 class TankServer:
-    def __init__(self, port: int = 50000, authkey: bytes = b'secret', save_file: str = None):
+    def __init__(self, port: int = 50000, authkey: bytes = b'secret', store_dir: str = None):
         """
         コンストラクタ
 
         引数:
           port (int): サーバがリッスンするポート番号 (デフォルト: 50000)
           authkey (bytes): サーバとの通信を認証するためのキー (デフォルト: b'secret')
-          save_file (str): オプション。データ永続化に使用するファイル名またはパス
-
-        内部状態:
-          store (VectorStore): VectorStore のインスタンス、タンクの管理を行います。
-          port (int): 指定されたポート番号
-          authkey (bytes): 指定された認証キー
+          store_dir (str): オプション。データ永続化に使用するディレクトリ。
+                           指定がなければカレントディレクトリを利用します。
         """
-        # VectorStore のインスタンスを生成。save_file が指定されれば永続化に利用
-        self.store = VectorStore(save_file=save_file)
+        self.store = VectorStore(store_dir=store_dir)
         self.port = port
         self.authkey = authkey
 

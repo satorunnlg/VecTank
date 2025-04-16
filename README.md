@@ -121,7 +121,17 @@ python examples/sample_benchmark.py
 
 ### 4. テストの実行
 
-VecTank では、unittest を利用したテストスイートが用意されています。  
+VecTank のテストを実行する前に、利用するテスト内容によってはサーバの起動が必要となる場合があります。  
+例えば、リモートクライアントやサーバを利用するテスト（`test_client.py`, `test_server.py` など）では、あらかじめ以下のコマンドでサーバを起動してください。
+
+```bash
+vectank-run --port 50000 --authkey secret --store_dir /path/to/your/store_dir
+```
+
+サーバが起動している状態で、次の各方法のテストを実行できます。
+
+#### unittest を利用する場合
+
 以下のコマンドで、全テストケースを詳細表示（verbose モード）で実行できます。
 
 ```bash
@@ -136,22 +146,21 @@ python -m unittest discover -v
 python -m unittest discover -v > test_results.txt 2>&1
 ```
 
-### 4. テストの実行 (pytest)
+#### pytest を利用する場合
 
-VecTank では、pytest を利用したテスト実行も可能です。  
 以下のコマンドで、全テストケースを実行できます。
 
 ```bash
 pytest --maxfail=1 --disable-warnings -q
 ```
 
-また、JUnit 形式の XML レポートを生成する場合は、次のように実行します。
+JUnit 形式の XML レポートを生成する場合は、次のように実行します。
 
 ```bash
 pytest --junitxml=report.xml
 ```
 
-出力された report.xml には、各テストケースの詳細な結果が記録されるので、CI/CD や解析に利用できます。
+※ サーバ起動が不要な単体テストの場合は、サーバプロセスを起動せずにテストを実行することも可能です。
 
 ---
 

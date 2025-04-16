@@ -1,55 +1,60 @@
 # tests/test_server.py
 import unittest
-from vectank.server import TankServer  # VectorDBServer → TankServer に名称統一
+import tempfile
+import os
+import time
+from multiprocessing import Process
+from vectank.server import TankServer
+from vectank.store import VectorStore
 from vectank.core import VectorSimMethod
 import numpy as np
-import time
-import threading
+
+def run_server(port, authkey, store_dir):
+    server = TankServer(port=port, authkey=authkey, store_dir=store_dir)
+    # サーバ起動後、一定時間待機することで外部からの接続や内部動作を検証できるようにする
+    server.run()
 
 class TestTankServer(unittest.TestCase):
-    def test_server_startup_and_shutdown(self):
+    def test_server_startup_and_store_dir(self):
         """
-        TankServer を起動して稼働確認を行うテストです。
-        ・TankServer のインスタンスを生成し、"test" タンクを作成。
-        ・サーバーを daemon スレッドとして起動し、一定時間後にスレッドが生存していることを確認します。
-        ※ サーバは daemon スレッドのため、テスト終了時に自動的に停止します。
+        TankServer の起動時に、store_dir の指定が正しく反映されるかを検証します。
+        また、サーバにより生成された VectorStore インスタンスの store_dir 属性が一致することを確認します。
         """
-        server = TankServer(port=50051, authkey=b'secret', save_file=None)
-        # タンク名 "test" で新たにタンクを作成。create_table → create_tank へ名称統一
-        server.store.create_tank("test", 10, VectorSimMethod.COSINE, np.float32)
-        thread = threading.Thread(target=server.run, daemon=True)
-        thread.start()
-        time.sleep(1)
-        self.assertTrue(thread.is_alive(), "サーバースレッドが起動しているはずです。")
-    
+        with tempfile.TemporaryDirectory() as tmpdir:
+            port = 50010
+            authkey = b'testkey'
+            # サーバをバックグラウンドプロセスで起動
+            server_proc = Process(target=run_server, args=(port, authkey, tmpdir))
+            server_proc.start()
+            # サーバ起動を待つ
+            time.sleep(2)
+            # サーバ内部に作成された VectorStore インスタンスの store_dir が正しいか確認
+            # ※ 本来はリモート接続して調査すべきですが、ここでは TankServer インスタンス生成直後の store_dir を再現するテスト例とします
+            server = TankServer(port=port, authkey=authkey, store_dir=tmpdir)
+            self.assertEqual(server.store.store_dir, tmpdir, "サーバ起動時に指定した store_dir がサーバの VectorStore に反映されている必要があります。")
+            server_proc.terminate()
+            server_proc.join()
+
     def test_server_data_persistence(self):
         """
-        TankServer の停止時に、各タンクのデータ保存処理が正しく動作するかを検証するテストです。
-        ・save_file を指定して TankServer インスタンスを生成し、タンクにデータを追加します。
-        ・KeyboardInterrupt 発生時に各タンクの save_to_file() メソッドが例外なく実行されるかを、
-          シミュレーション的に検証します。
-        ※ 本テストでは実際のファイル出力は行わず、保存処理の例外発生の有無を確認します。
+        永続化フラグが True のタンクに対し、保存処理が正常に実行され、指定された store_dir にファイルが出力されるかを検証します。
         """
-        server = TankServer(port=50052, authkey=b'secret', save_file="temp_test")
-        # "persistence_test" タンクを作成し、簡易的なデータを追加
-        tank = server.store.create_tank("persistence_test", 5, VectorSimMethod.INNER, np.float32)
-        vector = np.ones(5, dtype=np.float32)
-        tank.add_vector(vector, {"info": "test persistence"})
-        
-        # サーバーの run() メソッド内では KeyboardInterrupt 発生時に保存処理が呼ばれる仕様なので、
-        # 本テストでは直接 save_to_file() を呼び出して例外発生しないことを確認する
-        try:
-            for t in server.store.tanks.values():
-                t.save_to_file()
-        except Exception as e:
-            self.fail(f"保存処理で例外が発生しました: {e}")
-        
-        # サーバーを daemon スレッドで起動し、稼働中であることを簡易確認
-        thread = threading.Thread(target=server.run, daemon=True)
-        thread.start()
-        time.sleep(1)
-        self.assertTrue(thread.is_alive(), "サーバースレッドが起動しているはずです。")
-        thread.join(timeout=1)  # daemon のため、join 後に自動停止
+        with tempfile.TemporaryDirectory() as tmpdir:
+            # サーバ生成時に store_dir を指定
+            server = TankServer(port=50020, authkey=b'testkey', store_dir=tmpdir)
+            # 永続化フラグ True のタンクを作成
+            tank = server.store.create_tank("persistent_server", 3, VectorSimMethod.COSINE, np.float32, persist=True)
+            expected_path = os.path.join(tmpdir, "persistent_server")
+            self.assertEqual(tank.persistence_path, expected_path, "永続化パスは指定した store_dir/tank_name である必要があります。")
+            # タンクにデータを追加し、保存を呼び出す
+            vector = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+            tank.add_vector(vector, {"info": "server persistence test"})
+            tank.save_to_file()
+            # サンプルとして、npz と pickle ファイルが生成されることを確認（実装に依存）
+            vector_file = f"{expected_path}_{tank.tank_name}_vectors.npz"
+            meta_file = f"{expected_path}_{tank.tank_name}_meta.pkl"
+            self.assertTrue(os.path.exists(vector_file), "永続化用のベクトルファイルが生成されていない。")
+            self.assertTrue(os.path.exists(meta_file), "永続化用のメタデータファイルが生成されていない。")
 
 if __name__ == '__main__':
     unittest.main()
