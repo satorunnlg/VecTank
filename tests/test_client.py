@@ -18,22 +18,23 @@ class TestTankClient(unittest.TestCase):
     def setUp(self):
         """
         各テストケースの実行前に、TankClient インスタンスを生成し、
-        defaultタンク "default" を明示的に作成または取得します。
+        defaultタンク "default" を作成または取得します。
+
+        ※ get_tank() が存在しない場合 None を返す仕様になったため、
+           create_tank() を試み、既に存在する場合は ValueError を補足して
+           get_tank() で取得するようにしています。
         """
         self.client = TankClient()
-        # 既存の "default" タンクが存在するか確認し、なければ作成する
-        existing = self.client.get_tank("default")
-        if existing is None:
+        try:
             self.tank = self.client.create_tank("default", 1200, VectorSimMethod.COSINE, np.float32)
-        else:
-            self.tank = existing
+        except ValueError:
+            self.tank = self.client.get_tank("default")
 
     def test_get_tank(self):
         """
         get_tank() メソッドで "default" タンクを取得できるか検証します。
         タンクが None でないことを確認します。
         """
-        # setUpですでに "default" タンクを作成済みなので、改めて get_tank() で取得する
         tank = self.client.get_tank("default")
         self.assertIsNotNone(tank, "Default tank should not be None.")
 

@@ -57,14 +57,11 @@ class VectorStore:
           tank_name (str): 取得したいタンクの名前
 
         戻り値:
-          対応する VectorTank オブジェクト
-
-        例外:
-          タンクが存在しない場合、KeyError を送出します。
+          対応する VectorTank オブジェクト。存在しない場合は None を返します。
         """
         # タンクが存在するかチェック
         if tank_name not in self.tanks:
-            raise KeyError(f"タンク {tank_name} は存在しません。")
+            return None
         # 存在するタンクを返す
         return self.tanks[tank_name]
 
