@@ -405,7 +405,6 @@ class VecTank:
         if not VecTank.send_command_to_store(save_cmd, store_name=self.store_name):
             print("[ERROR] TankStore did not acknowledge tank save.")
             return
-        pass
     
     def out_log(self, message: str = None):
         """
@@ -415,7 +414,6 @@ class VecTank:
         if not VecTank.send_command_to_store(log_cmd, store_name=self.store_name):
             print("[ERROR] TankStore did not acknowledge tank log.")
             return
-        pass
 
     def close(self):
         try:
