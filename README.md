@@ -16,20 +16,16 @@ VecTank は、軽量で高速なベクトル検索を実現するライブラリ
   - 内積、コサイン類似度、ユークリッド距離など複数の類似度計算方式に対応。
 
 - **柔軟なタンク管理**  
-  - `VectorTank` クラスにより、各タンクごとに次元数、データ型、デフォルトの計算方式を個別に設定可能。
-  - `VectorStore` クラスで複数のタンクを一元管理できます。
+  - `VecTank` クラスにより、各タンクごとに次元数、データ型、デフォルトの計算方式を個別に設定可能。
+  - `TankStore` クラスで複数のタンクを一元管理できます。
 
 - **データ永続化機能**  
   - ベクトルデータは `.npz` 形式、メタデータは `pickle` 形式で保存。
   - サーバ停止前に自動保存する仕組みを備えています。
 
 - **サーバ／クライアント通信**  
-  - `multiprocessing.managers.BaseManager` を使用し、同一ホスト内でのプロセス間通信を実現。
-  - サーバ（`TankServer`）とクライアント（`TankClient`）でシンプルな API 呼び出しが可能です。
-
-- **コマンドラインインターフェース (CLI)**  
-  - インストール後、`vectank-run` コマンドで VecTank サーバを簡単に起動できます。
-  - ポート番号、認証キー、データ保存プレフィックスなどのオプションを指定可能。
+  - シンプルな API で、CLI 経由のサーバ起動やクライアントからの接続をサポート。
+  - サーバ（`vectank-run` コマンド経由で起動）と、クライアント（`TankClient`）を利用し簡単な操作が可能です。
 
 - **一括登録機能**  
   - 単一および複数のベクトルとメタデータを一度に登録可能な API を提供し、バッチ処理にも対応。
@@ -78,8 +74,7 @@ vectank-run --port 50000 --authkey secret
 - `--port`: サーバのポート番号 (デフォルト: 50000)
 - `--authkey`: 認証キー (デフォルト: "secret")
 
-このサーバは起動時に default タンクは自動生成しません。  
-必要に応じたタンクはサーバ起動後に作成してください.
+サーバ起動時には、必要に応じてタンクの作成を行ってください。
 
 ### 2. クライアントからの利用
 
@@ -102,7 +97,7 @@ metadata = {"name": "サンプルベクトル"}
 key = tank.add_vector(vector, metadata)
 print(f"追加したベクトルのキー: {key}")
 
-# クエリベクトルによる検索（上位 5 件を取得）
+# クエリベクトルによる検索（上位 5件を取得）
 results = tank.search(vector, top_k=5)
 for res in results:
     print(res)
@@ -121,14 +116,7 @@ python examples/sample_benchmark.py
 
 ### 4. テストの実行
 
-VecTank のテストを実行する前に、利用するテスト内容によってはサーバの起動が必要となる場合があります。  
-例えば、リモートクライアントやサーバを利用するテスト（`test_client.py`, `test_server.py` など）では、あらかじめ以下のコマンドでサーバを起動してください。
-
-```bash
-vectank-run --port 50000 --authkey secret --store_dir /path/to/your/store_dir
-```
-
-サーバが起動している状態で、次の各方法のテストを実行できます。
+VecTank のテストを実行する前に、サーバの起動が必要なテストも含まれるため、場合によっては事前にサーバを起動してください。
 
 #### unittest を利用する場合
 
@@ -172,10 +160,10 @@ VecTank リポジトリは以下のようなディレクトリ構成になって
 VecTank/
 ├── vectank/           # ライブラリ本体
 │   ├── __init__.py    # パッケージエントリポイント（公開 API の定義）
-│   ├── core.py        # 類似度計算方式（Enum、計算関数、SIM_METHODS）
-│   ├── tank.py        # VectorTank クラス（ベクトルの追加、検索、更新、削除、永続化）
-│   ├── store.py       # VectorStore クラス（複数タンク管理）
-│   ├── server.py      # TankServer クラス（サーバ起動機能）
+│   ├── core.py        # 類似度計算方式（Enum、計算関数など）
+│   ├── tank.py        # VecTank クラス（ベクトルの追加、検索、更新、削除、永続化）
+│   ├── store.py       # TankStore クラス（複数タンク管理）
+│   ├── server.py      # サーバ起動用スクリプト（vectank-run のエントリポイント）
 │   └── client.py      # TankClient クラス（クライアント用 API）
 ├── vectank/cli.py     # コマンドライン起動用のスクリプト（entry_point: vectank-run）
 ├── examples/          # 利用例・サンプルスクリプト

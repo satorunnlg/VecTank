@@ -1,86 +1,65 @@
-# tests/test_store.py
-import unittest
-import tempfile
 import os
-from vectank.store import VectorStore
-from vectank.core import VectorSimMethod
-import numpy as np
+import pytest
+from tempfile import TemporaryDirectory
 
-class TestVectorStore(unittest.TestCase):
-    def setUp(self):
-        """
-        各テストケース実行前に、VectorStore インスタンスを初期化します。
-        VectorStore は複数のタンクを管理するクラスです。
-        """
-        self.store = VectorStore()
-        # 内部の tanks 辞書をクリア
-        self.store.tanks = {}
+# vectankモジュールからTankStoreおよびTankをインポートする前提です。
+from vectank import TankStore, Tank
 
-    def test_create_and_get_tank(self):
-        """
-        create_tank() および get_tank() メソッドのテストです。
-        """
-        tank = self.store.create_tank("test_tank", 3, VectorSimMethod.COSINE, np.float32)
-        self.assertIsNotNone(tank, "作成されたタンクは None であってはいけません。")
-        self.assertEqual(self.store.get_tank("test_tank"), tank, "取得したタンクは作成したタンクと一致する必要があります。")
-        # persist が指定されていなければ False となり、永続化パスは None になるはず
-        self.assertFalse(tank.persist, "永続化フラグが指定されていなければ False である必要があります。")
-        self.assertIsNone(tank.persistence_path, "永続化パスは指定されなかった場合 None である必要があります。")
-
-    def test_drop_tank_and_list_tanks(self):
-        """
-        drop_tank() および list_tanks() メソッドのテストです。
-        """
-        self.store.create_tank("tank1", 3, VectorSimMethod.COSINE, np.float32)
-        self.store.create_tank("tank2", 3, VectorSimMethod.COSINE, np.float32)
-        self.store.create_tank("tank3", 3, VectorSimMethod.COSINE, np.float32)
-        
-        tanks_before = self.store.list_tanks()
-        self.assertIn("tank2", tanks_before, "tank2 は作成されたタンク一覧に含まれているはずです。")
-        
-        self.store.drop_tank("tank2")
-        tanks_after = self.store.list_tanks()
-        self.assertNotIn("tank2", tanks_after, "削除された tank2 はタンク一覧に含まれてはいけません。")
+def test_create_and_get_tank(tmp_path):
+    store_dir = tmp_path / "tank_store"
+    store_dir.mkdir()
+    tank_store = TankStore(store_dir=str(store_dir))
     
-    def test_duplicate_tank_creation(self):
-        """
-        既存のタンク名と重複して create_tank() を呼び出した場合に
-        ValueError が送出されるか検証するテストです。
-        """
-        self.store.create_tank("duplicate", 3, VectorSimMethod.COSINE, np.float32)
-        with self.assertRaises(ValueError):
-            self.store.create_tank("duplicate", 3, VectorSimMethod.COSINE, np.float32)
+    # タンクの作成
+    tank = tank_store.create_tank("test_tank")
+    assert isinstance(tank, Tank)
+    
+    # 取得したタンクでベクトルの追加と検索が可能なことを確認
+    vec = [1, 2, 3]
+    # 修正: メタデータを辞書で渡す
+    vector_id = tank.add_vector(vec, {"label": "store_test"})
+    fetched_tank = tank_store.get_tank("test_tank")
+    results = fetched_tank.search(query=vec)
+    assert any(item["id"] == vector_id for item in results)
 
-    def test_persistence_file_creation(self):
-        """
-        store_dir が指定された場合、永続化フラグ True のタンクで、
-        タンク名に基づく永続化用ファイルが出力されることを検証します。
-        """
-        with tempfile.TemporaryDirectory() as tmpdir:
-            store = VectorStore(store_dir=tmpdir)
-            # persist=True でタンク作成
-            tank = store.create_tank("persistent_tank", 3, VectorSimMethod.COSINE, np.float32, persist=True)
-            expected_path = os.path.join(tmpdir, "persistent_tank")
-            self.assertEqual(tank.persistence_path, expected_path, "永続化パスが正しく設定されていない")
-            # save_to_file() を呼び出して、実際にファイル出力を実施
-            tank.save_to_file()
-            # 実際の出力ファイル名は、VectorTank 内部の実装に依存するが、
-            # ここでは例として _vectors と _meta のファイルが作成されることをチェックする。
-            vector_file = f"{expected_path}_{tank.tank_name}_vectors.npz"
-            meta_file = f"{expected_path}_{tank.tank_name}_meta.pkl"
-            self.assertTrue(os.path.exists(vector_file), "ベクトルファイルが作成されていません。")
-            self.assertTrue(os.path.exists(meta_file), "メタデータファイルが作成されていません。")
+def test_duplicate_tank_creation(tmp_path):
+    store_dir = tmp_path / "tank_store"
+    store_dir.mkdir()
+    tank_store = TankStore(store_dir=str(store_dir))
+    
+    # 同一名タンクの2回生成で例外が発生することを確認
+    _ = tank_store.create_tank("test_tank")
+    with pytest.raises(Exception):
+        tank_store.create_tank("test_tank")
 
-    def test_default_store_dir(self):
-        """
-        store_dir が指定されなかった場合、カレントディレクトリが利用されることを検証します。
-        """
-        # カレントディレクトリの取得
-        current_dir = os.getcwd()
-        store = VectorStore()  # store_dir 未指定 → カレントディレクトリ利用
-        tank = store.create_tank("default_dir_tank", 3, VectorSimMethod.COSINE, np.float32, persist=True)
-        expected_path = os.path.join(current_dir, "default_dir_tank")
-        self.assertEqual(tank.persistence_path, expected_path, "store_dir が未指定の場合、カレントディレクトリが利用される必要があります。")
+def test_delete_tank(tmp_path):
+    store_dir = tmp_path / "tank_store"
+    store_dir.mkdir()
+    tank_store = TankStore(store_dir=str(store_dir))
+    
+    # タンクの作成と削除
+    _ = tank_store.create_tank("test_tank")
+    tank_store.delete_tank("test_tank")
+    
+    # 削除後の取得で例外またはNoneが返されることを期待
+    with pytest.raises(Exception):
+        tank_store.get_tank("test_tank")
 
-if __name__ == '__main__':
-    unittest.main()
+def test_persistence_files(tmp_path):
+    store_dir = tmp_path / "tank_store"
+    store_dir.mkdir()
+    tank_store = TankStore(store_dir=str(store_dir))
+    
+    # 永続化対象のタンク作成とデータ登録
+    tank = tank_store.create_tank("persist_tank")
+    vec = [4, 5, 6]
+    # 修正: メタデータを辞書で渡す
+    vector_id = tank.add_vector(vec, {"label": "persistence"})
+    
+    # タンクの保存処理を実行
+    tank.save()
+    
+    # 保存先ディレクトリに永続化ファイルが作成されているか検証
+    # ※拡張子やファイル名は実装に合わせてください
+    persistence_file = os.path.join(str(store_dir), "persist_tank.npz")
+    assert os.path.exists(persistence_file)

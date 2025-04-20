@@ -16,7 +16,7 @@ setup(
     ],
     entry_points={
         'console_scripts': [
-            'vectank-run=vectank.cli:main',
+            'vectank-run=vectank.server:main',
         ],
     },
     classifiers=[

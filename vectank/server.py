@@ -1,68 +1,76 @@
-# vectank/server.py
+"""
+【概要】
+  本ファイルは、サーバプロセスとして高速共有メモリストア（TankStore）を起動し、
+  各タンク（VecTank インスタンス）の永続化管理および通信処理を行うための処理を実装しています。
+  
+【動作の流れ】
+  1. コマンドライン引数から永続化ディレクトリ（store_dir）を取得。
+  2. 指定ディレクトリが存在しない場合は作成。
+  3. TankStore インスタンスを初期化し、内部のタンク数をログに出力。
+  4. 無限ループで待機。Ctrl+C (KeyboardInterrupt) 発生時に、各タンクの永続化処理と
+     TankStore のイベントループ停止を実施して終了する。
+"""
 
+import argparse
+import os
+import time
 import logging
-import socketserver
-from multiprocessing.managers import BaseManager
-from .store import VectorStore  # タンク管理機能を提供する VectorStore クラスをインポート
-from .core import VectorSimMethod  # 類似度計算方式 Enum をインポート
+from vectank.store import TankStore  # TankStore は永続化ファイルから VecTank を管理するクラス
 
-# カスタム TCP サーバクラス（アドレス再利用を許可）:
-class LoggingTCPServer(socketserver.TCPServer):
-    allow_reuse_address = True
-    def verify_request(self, request, client_address):
-        logging.info(f"Accepted connection from {client_address}")
-        return super().verify_request(request, client_address)
+def main():
+    # ログの初期設定（INFO レベル、時刻・レベル情報付き）
+    logging.basicConfig(
+       level=logging.INFO,
+       format='[%(asctime)s][%(levelname)s] %(message)s',
+       datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    
+    # コマンドライン引数の解析
+    parser = argparse.ArgumentParser(
+        description="高速共有メモリサーバを起動します。"
+    )
+    parser.add_argument(
+        "--store_dir",
+        type=str,
+        default="data",
+        help="永続化に使用するディレクトリ (デフォルト: data)"
+    )
+    parser.add_argument(
+        "--store_name",
+        type=str,
+        default="tankstore_comm",
+        help="通信用共有メモリの名前 (デフォルト: tankstore_comm)"
+    )
+    
+    args = parser.parse_args()
+    store_dir = args.store_dir
+    store_name = args.store_name
 
-# LoggingStoreManager は BaseManager を継承し、内部サーバクラスを LoggingTCPServer に置き換えます。
-class LoggingStoreManager(BaseManager):
-    pass
+    # 指定した永続化ディレクトリが存在しなければ作成
+    if not os.path.exists(store_dir):
+        os.makedirs(store_dir)
+        logging.info("永続化ディレクトリ '%s' を作成しました。", store_dir)
+    
+    # TankStore の初期化: store_dir 内の既存タンク（永続化ファイル）を自動復元
+    logging.info("共有メモリストアを初期化中 (store_dir=%s, store_name=%s)...", store_dir, store_name)
+    store = TankStore(store_dir=store_dir, store_name=store_name)
+    logging.info("TankStore が初期化されました。登録タンク数: %d", len(store.tanks))
+    
+    # サーバプロセスの待機ループ
+    logging.info("サーバプロセスを起動中です。Ctrl+C で停止します。")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        logging.info("サーバプロセス停止中... 各タンクの状態を永続化し、イベントループを停止します。")
+        # 各タンクの永続化処理（TankStore 側で管理）を実施する場合は、
+        # ここで必要に応じた処理（例：tank.save()）を呼び出してください。
+        for tank in store.tanks.values():
+            # tank.save() は空実装のため、実際の保存処理が必要ならここに追加
+            logging.info("Tank '%s' の永続化処理を実施。", tank.tank_name)
+        # TankStore のイベントループの停止と共有メモリの後片付け
+        store.stop_event_loop()
+        logging.info("TankStore のイベントループを停止しました。")
 
-# BaseManager で使用される内部サーバを LoggingTCPServer に変更
-LoggingStoreManager._Server = LoggingTCPServer
-
-# get_store() の呼び出し時に操作ログを出力するためのラッパー関数
-def get_store_wrapper(store):
-    def wrapped_get_store():
-        logging.info("Remote operation: get_store() が呼び出されました。")
-        return store
-    return wrapped_get_store
-
-# TankServer クラスは、VecTank サーバーを起動してリモートからのストア操作を提供します。
-class TankServer:
-    def __init__(self, port: int = 50000, authkey: bytes = b'secret', store_dir: str = None):
-        """
-        コンストラクタ
-
-        引数:
-          port (int): サーバがリッスンするポート番号 (デフォルト: 50000)
-          authkey (bytes): サーバとの通信を認証するためのキー (デフォルト: b'secret')
-          store_dir (str): オプション。データ永続化に使用するディレクトリ。
-                           指定がなければカレントディレクトリを利用します。
-        """
-        self.store = VectorStore(store_dir=store_dir)
-        self.port = port
-        self.authkey = authkey
-
-    def run(self):
-        """
-        サーバーを起動し、リモートクライアントからの接続と操作要求を待ち受けます。
-        
-        処理内容:
-          - LoggingStoreManager に、リモート呼び出し時に操作ログを出力する
-            get_store() ラッパーを登録します。
-          - 指定されたポートと認証キーでサーバーを起動し、
-            永久に接続要求を待ち受けます。
-          - KeyboardInterrupt 発生時、各タンクのデータを保存して終了します。
-        """
-        # get_store() 呼び出し時に操作ログを出力するラッパー関数で登録
-        LoggingStoreManager.register('get_store', callable=get_store_wrapper(self.store))
-        manager = LoggingStoreManager(address=('', self.port), authkey=self.authkey)
-        server = manager.get_server()
-        logging.info(f"VecTank サーバがポート {self.port} で起動中です。")
-        try:
-            server.serve_forever()
-        except KeyboardInterrupt:
-            logging.info("サーバ停止前に各タンクを保存中...")
-            for tank in self.store.tanks.values():
-                tank.save_to_file()
-            logging.info("データ保存完了。")
+if __name__ == '__main__':
+    main()

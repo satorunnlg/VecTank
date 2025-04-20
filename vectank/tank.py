@@ -1,390 +1,510 @@
-# vectank/tank.py
-import numpy as np  # 数値計算ライブラリ NumPy をインポート
-import threading    # 複数のスレッドからの同時アクセスを防ぐためのロック機構を提供
-import pickle       # オブジェクトの永続化（シリアライズ／デシリアライズ）に利用
-import os           # ファイルやパスの操作に利用
-from .core import VectorSimMethod, SIM_METHODS  # 類似度計算方法の Enum と、各計算関数の辞書をインポート
+"""
+【概要】
+  本ファイルには、共有メモリを利用してベクトルとメタデータの管理を行う VecTank クラスが定義されています。
+  ・固定サイズの NumPy 配列を共有メモリ上に確保し、各操作（追加、複数追加、検索、更新、削除、フィルタ、クリア）を実装。
+  ・persist=True の場合、指定ディレクトリ内に「タンク名.npz」「タンク名.pkl」として永続化ファイルを生成し、状態を保持／復元します。
 
-# VectorTank クラスは、ベクトルとそれに紐付くメタデータを管理するタンクを表現します。
-class VectorTank:
-    def __init__(self, tank_name: str, dim: int,
-                 default_sim_method: VectorSimMethod,
-                 dtype: np.dtype, persist: bool = False, file_path: str = None):
+【主なメソッド】
+  - add_vector: 単一のベクトルとメタデータを追加
+  - add_vectors: 複数のベクトルと対応するメタデータを一括追加
+  - search: 指定した類似度計算方式によりクエリに近いベクトルを検索（SIM_METHODS を参照）
+  - update_vector: 指定キーのベクトルとメタデータを更新
+  - filter_by_metadata: 指定条件に合致するメタデータを持つベクトルのキー一覧を返す
+  - delete, delete_keys: 単一または複数のベクトル削除後、内部データを再構築
+  - clear: 全データをクリア
+  - __str__: タンクの基本情報を文字列で返す（デバッグ用）
+  
+【注意点】
+  - 全操作はロックによる排他制御下で行われ、複数のスレッド／プロセス間の同時アクセスに対応しています。
+  - ベクトルのキーは「1-indexed」の文字列で自動採番されます。
+"""
+
+import os
+import pickle
+import numpy as np
+from multiprocessing import shared_memory, Lock
+from vectank.core import SIM_METHODS  # 類似度計算関数群
+import time
+import copy
+import json
+
+class VecTank:
+    _lock = Lock()
+    
+    def __init__(self, tank_name: str, dim: int = 1200, max_capacity: int = 100000, single_meta_size: int = 4096,
+                 persist: bool = False, sim_method: str = "COSINE"):
+        """
+        コンストラクタ
+          tank_name: タンクの名称
+          dim: 各ベクトルの次元数
+          max_capacity: タンクに格納可能な最大ベクトル数
+          persist: 永続化モード（ただし、ファイル操作は TankStore に依存）
+          store_dir: 永続化に用いるディレクトリ（ファイル操作は外部で実施）
+        """
         self.tank_name = tank_name
         self.dim = dim
-        self.default_sim_method = default_sim_method
-        self.dtype = dtype
+        self.max_capacity = max_capacity
         self.persist = persist
-        if self.persist:
-            if file_path is None:
-                self.persistence_path = os.path.join(os.getcwd(), self.tank_name)
-            else:
-                self.persistence_path = file_path
-        else:
-            self.persistence_path = None
-        self._lock = threading.Lock()
-        self._vectors = np.empty((0, dim), dtype=dtype)
-        self._metadata = {}
-        self._key_to_index = {}
-        self._auto_id = 0
+        self.sim_method = sim_method
+        self.dtype = np.dtype("float32")
+        # 各ベクトルに対応するメタデータを保持する辞書
+        self.metadata = {}
+        # 共有メモリでメタデータ同期用の固定サイズバッファ確保（サイズは必要に応じて調整）
+        self._meta_shm_single_size = single_meta_size
+        # 永続化時に保存する補助情報（主に初期パラメータ）
+        self.metadata["params"] = {
+            "dim": self.dim,
+            "dtype": self.dtype.name,
+            "default_sim_method": self.sim_method,
+            "max_capacity": self.max_capacity,
+            "persist": self.persist,
+            "tank_name": self.tank_name,
+            "meta_shm_single_size": self._meta_shm_single_size
+            }
 
-        if self.persist:
-            self.load_from_file()
+    def create_shared_memory(self):
+        """
+        TankStore 側でのタンク生成時に呼び出されるメソッド。
+        共有メモリを生成し、ベクトルデータとメタデータを格納するための NumPy 配列を作成します。
+        共有メモリのサイズは、最大ベクトル数と次元数に基づいて計算されます。
+        共有メモリの名前は、TankStore 側で指定されたものを使用します。
+        """
+        # 共有メモリ上に確保するバイト数を計算（float32 固定）
+        size = self.max_capacity * self.dim * self.dtype.itemsize
+        # 共有メモリブロックの生成（create=True）
+        self.shm = shared_memory.SharedMemory(name=f"{self.tank_name}_vector", create=True, size=size)
+        # 共有メモリ上の NumPy 配列としてベクトルデータを管理
+        self.vectors = np.ndarray((self.max_capacity, self.dim), dtype=self.dtype, buffer=self.shm.buf)
+        self.vectors.fill(0)
+        # メタデータ用の共有メモリサイズを計算
+        self._meta_shm_size = self._meta_shm_single_size * self.max_capacity
+        # メタデータ用の共有メモリブロックを生成（create=True）
+        self.meta_shm = shared_memory.SharedMemory(name=f"{self.tank_name}_meta", create=True, size=self._meta_shm_size)
+        # 初期状態（空の辞書）を pickle 化して書き込み
+        self._update_shared_metadata()
     
-    def __getstate__(self):
+    def _update_shared_metadata(self):
         """
-        オブジェクトのシリアライズ時に呼び出される。
-        threading.Lock はシリアライズできないため、状態から削除して返す。
+        self.metadata の内容を pickle 化して、共有メモリ meta_shm に書き込みます。
         """
-        state = self.__dict__.copy()
-        if '_lock' in state:
-            del state['_lock']
-        return state
+        meta_bytes = pickle.dumps(self.metadata)
+        if len(meta_bytes) > self._meta_shm_size:
+            raise MemoryError("Serialized metadata exceeds shared memory size.")
+        # 共有メモリバッファをクリアし、シリアライズしたデータを書き込み
+        self.meta_shm.buf[:self._meta_shm_size] = b'\x00' * self._meta_shm_size
+        self.meta_shm.buf[:len(meta_bytes)] = meta_bytes
 
-    def __setstate__(self, state):
+    def attach_shared_memory(self):
         """
-        オブジェクトのデシリアライズ時に呼び出される。
-        ロックを再生成して、デシリアライズ後のオブジェクトを初期化する。
+        VecTank 側でTankStore側のタンクを取得する際に呼び出されるメソッド。
         """
-        self.__dict__.update(state)
-        self._lock = threading.Lock()
+        # 共有メモリブロックの生成（create=True）
+        self.shm = shared_memory.SharedMemory(name=f"{self.tank_name}_vector", create=False)
+        # 共有メモリ上の NumPy 配列としてベクトルデータを管理
+        self.vectors = np.ndarray((self.max_capacity, self.dim), dtype=self.dtype, buffer=self.shm.buf)
+        # メタデータ用の共有メモリブロックを生成（create=True）
+        self.meta_shm = shared_memory.SharedMemory(name=f"{self.tank_name}_meta", create=False)
+        self.metadata = self._read_shared_metadata()
+        self._parse_params(self.metadata.get("params"))
 
-    def __len__(self):
-        """テーブルに登録されている全データ件数を返す。"""
-        with self._lock:
-            return len(self._metadata)
-
-    def _generate_key(self) -> str:
+    def _read_shared_metadata(self):
         """
-        新しいベクトル追加時に、自動採番で一意なキーを生成する。
-        
-        戻り値:
-          自動生成された一意な文字列キー
+        共有メモリ meta_shm から pickle 化された辞書を読み出して
+        元の self.metadata に戻し、返します。
         """
-        self._auto_id += 1
-        return str(self._auto_id)
-
-    def add_vector(self, vector: np.ndarray, metadata: dict, key: str = None) -> str:
+        # 1) バッファ全体をバイト列として取得
+        raw = self.meta_shm.buf
+        # 2) trailing '\x00' を除去（write時に余白をゼロクリアしているため）
+        pickled = bytes(raw).rstrip(b'\x00')
+        # 3) pickle をアンロードして辞書に戻す
+        metadata = pickle.loads(pickled)
+        # 必要なら self.metadata を更新してもよい
+        self.metadata = metadata
+        return metadata
+    
+    def _parse_params(self, params: dict):
         """
-        単一のベクトルと付随するメタデータをタンクに追加する。
-
-        引数:
-          vector (np.ndarray): 追加するベクトル (形状は (dim,) である必要がある)
-          metadata (dict): ベクトルに関連付けるメタデータ
-          key (str, オプション): ベクトルに対する一意なキー。指定されなければ自動採番される
-
-        戻り値:
-          使用されたキー (自動生成または指定されたキー)
-
-        例外:
-          - キーが重複している場合、ValueError を送出
-          - ベクトルの次元が想定と異なる場合、ValueError を送出
+        共有メモリから読み込んだメタデータのパラメータをインスタンス変数に設定します。
         """
-        with self._lock:
-            # キーが指定されていなければ、自動的に生成
-            if key is None:
-                key = self._generate_key()
-            else:
-                key = str(key)
-            # 同じキーが既に存在する場合はエラーを送出
-            if key in self._key_to_index:
-                raise ValueError(f"キー {key} は既に存在しています。")
-            # ベクトルの形状チェック。次元が一致しなければエラー
+        if params is None:
+            raise ValueError("metadata['params'] が存在しません")
+
+        # 必要に応じて型をキャスト
+        self.dim = int(params["dim"])
+        # 文字列 'float32' → NumPy dtype に変換したいなら次のように
+        self.dtype = np.dtype(params["dtype"])
+        # そのまま文字列として保持するなら以下でも OK
+        # self.dtype = params["dtype"]
+
+        self.sim_method      = params["default_sim_method"]
+        self.max_capacity    = int(params["max_capacity"])
+        self.persist         = bool(params["persist"])
+        self.tank_name       = params["tank_name"]
+        self._meta_shm_single_size = int(params["meta_shm_single_size"])
+        # メタデータ用の共有メモリサイズを計算
+        self._meta_shm_size = self._meta_shm_single_size * self.max_capacity
+        return
+
+    @classmethod
+    def send_command_to_store(cls, command: str, store_name: str = "tankstore_comm", timeout: float = 5.0) -> bool:
+        """
+        TankStore との通信用共有メモリ (store_name) に対してコマンドを送信します。
+        コマンド送信後、共有メモリバッファ（uint8 配列）が全0になるまでポーリングし、
+        完了（Ack）したかどうかを返します。
+        """
+        from multiprocessing import shared_memory
+        import numpy as np, time
+
+        try:
+            comm_shm = shared_memory.SharedMemory(name=store_name, create=False)
+        except FileNotFoundError:
+            print(f"[ERROR] Communication SHM '{store_name}' not found.")
+            return False
+
+        with cls._lock:
+            comm_buffer = np.ndarray((1024,), dtype=np.uint8, buffer=comm_shm.buf)
+            # 送信前にバッファをクリア
+            comm_buffer.fill(0)
+            cmd_bytes = command.encode('utf-8') + b'\x00'
+            comm_buffer[:len(cmd_bytes)] = np.frombuffer(cmd_bytes, dtype=np.uint8)
+            print(f"[DEBUG] Command '{command}' sent to TankStore using shared mem '{store_name}'. Waiting for acknowledgment...")
+
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                if not np.any(comm_buffer):
+                    print("[DEBUG] Acknowledgment received from TankStore.")
+                    comm_shm.close()
+                    return True
+                time.sleep(0.1)
+            print("[ERROR] Acknowledgment not received within timeout.")
+            comm_shm.close()
+        return False
+
+    @classmethod
+    def create_tank(cls, tank_name: str, dim: int, persist: bool = False,
+                    max_capacity: int = 10000, store_name: str = "tankstore_comm", single_meta_size: int = 4096, sim_method: str = "COSINE") -> "VecTank":
+        """
+        TankStore 側に通信して新規タンクを生成し、生成されたタンクインスタンスを返します。
+        store_name を指定することで、複数サーバ環境での利用が可能となります。
+        """
+
+        create_cmd = f"create,{tank_name},{dim},{persist},{max_capacity},{single_meta_size},{sim_method}"
+        if not cls.send_command_to_store(create_cmd, store_name=store_name):
+            print("[ERROR] TankStore did not acknowledge tank creation.")
+            return None
+
+        print(f"[DEBUG] Tank '{tank_name}' created and restored via TankStore.")
+        dummy = cls(tank_name, dim, max_capacity, single_meta_size, persist, sim_method)
+        dummy.attach_shared_memory()
+        dummy.store_name = store_name
+        return dummy
+
+    @classmethod
+    def get_tank(cls, tank_name: str, store_name: str = "tankstore_comm") -> "VecTank":
+        """
+        TankStore 側に通信して、既存のタンクを取得して返します。
+        store_name を指定することで、複数サーバ環境での利用が可能となります。
+        """
+        dummy = cls(tank_name)
+        dummy.attach_shared_memory()
+        dummy.store_name = store_name
+        return dummy
+
+    def add_vector(self, vector: np.ndarray, meta: dict):
+        """
+        単一のベクトルおよび紐づくメタデータを追加する。
+          vector: 形状 (dim,) の NumPy 配列（float32 に変換されます）
+          meta: ベクトルに関連付いたメタデータの辞書
+        戻り値: 自動採番されたキー（1-indexed の文字列）
+        """
+        with self.__class__._lock:
+            num_vectors = len(self)
+            if num_vectors >= self.max_capacity:
+                raise MemoryError("Tank capacity reached.")
             if vector.shape != (self.dim,):
-                raise ValueError(f"ベクトルの次元は ({self.dim},) である必要があります。")
-            # 1次元のベクトルを 2次元 (1, dim) に変形
-            vector_reshaped = vector.reshape(1, self.dim)
-            # 既存のベクトル配列が空の場合、新たに設定。そうでなければ連結
-            if self._vectors.size == 0:
-                self._vectors = vector_reshaped
-            else:
-                self._vectors = np.concatenate([self._vectors, vector_reshaped], axis=0)
-            # 新しく追加したベクトルのインデックスを取得
-            new_index = self._vectors.shape[0] - 1
-            # キーとインデックスの対応を登録
-            self._key_to_index[key] = new_index
-            # メタデータもキーに紐付けて登録
-            self._metadata[key] = metadata
-            return key
+                raise ValueError(f"Vector shape must be ({self.dim},).")
+            vec = vector.astype(self.dtype, copy=False)
+            self.vectors[num_vectors, :] = vec
+            key = str(num_vectors + 1)
+            self.metadata[key] = meta
+            self._update_shared_metadata()
+        return key
 
     def add_vectors(self, vectors: np.ndarray, metadata_list: list, keys: list = None) -> list:
-        """
-        複数のベクトルと対応するメタデータを一括追加する。
-
-        引数:
-          vectors (np.ndarray): ベクトル群 (形状は (n, dim) である必要がある)
-          metadata_list (list): 各ベクトルに対応するメタデータのリスト (長さは n)
-          keys (list, オプション): 各ベクトルに対するキーのリスト。指定される場合は長さ n に一致すること
-
-        戻り値:
-          追加された各ベクトルに対応するキーのリスト
-
-        例外:
-          - 入力の次元またはリストの長さが条件に満たない場合、ValueError を送出
-          - キーが重複している場合、ValueError を送出
-        """
-        with self._lock:
-            if vectors.ndim != 2 or vectors.shape[1] != self.dim:
-                raise ValueError(f"入力ベクトルは形状 (n, {self.dim}) である必要があります。")
+        with self.__class__._lock:
             n = vectors.shape[0]
+            if vectors.shape[1] != self.dim:
+                raise ValueError(f"Each vector must have {self.dim} dimensions.")
             if len(metadata_list) != n:
-                raise ValueError("metadata_list の長さは追加するベクトル数と一致する必要があります。")
+                raise ValueError("Length of metadata_list must match number of vectors.")
             if keys is not None and len(keys) != n:
-                raise ValueError("keys が指定されている場合、長さはベクトル数と一致する必要があります。")
+                raise ValueError("Length of keys must match number of vectors.")
             new_keys = []
-            # 各ベクトルに対してキーを生成または指定されたキーを確認
+            num_vectors = len(self)
+            if num_vectors + n > self.max_capacity:
+                raise MemoryError("Adding vectors exceeds capacity.")
             for i in range(n):
-                if keys is None:
-                    key = self._generate_key()
-                else:
-                    key = str(keys[i])
-                if key in self._key_to_index:
-                    raise ValueError(f"キー {key} は既に存在しています。")
+                key = str(num_vectors + i + 1) if keys is None else str(keys[i])
+                vec = vectors[i].astype(self.dtype, copy=False)
+                self.vectors[num_vectors + i, :] = vec
+                self.metadata[key] = metadata_list[i]
                 new_keys.append(key)
-            # ベクトル群の追加。初回ならコピー、既存なら連結する
-            if self._vectors.size == 0:
-                self._vectors = vectors.copy()
-            else:
-                self._vectors = np.concatenate([self._vectors, vectors], axis=0)
-            # 現在のベクトル数から新たに追加される前のカウントを取得
-            old_count = self._vectors.shape[0] - n
-            # 各ベクトルに対してキーとメタデータを登録
-            for i, key in enumerate(new_keys):
-                index = old_count + i
-                self._key_to_index[key] = index
-                self._metadata[key] = metadata_list[i]
-            return new_keys
+            self._update_shared_metadata()
 
-    def search(self, query_vector: np.ndarray, top_k: int, sim_method = None):
-        """
-        指定されたクエリベクトルに対して類似度検索を行い、上位 top_k 件の結果を返します。
+        return new_keys
 
-        引数:
-          query_vector (np.ndarray): 検索用のクエリベクトル (形状は (dim,) である必要がある)
-          top_k (int): 返す上位の件数
-          sim_method (オプション): 利用する類似度計算方法 (指定しなければデフォルトを利用)
-
-        戻り値:
-          (キー, 類似度スコア, ベクトル, メタデータ) のタプルのリスト
-
-        例外:
-          - クエリベクトルの次元が一致しなかった場合、ValueError を送出
-          - 指定された類似度計算方式が未対応の場合、ValueError を送出
-        """
-        with self._lock:
-            if query_vector.shape != (self.dim,):
-                raise ValueError(f"クエリベクトルの次元は ({self.dim},) である必要があります。")
-            # 利用する類似度計算方式を決定 (指定がなければデフォルト)
-            method = sim_method if sim_method is not None else self.default_sim_method
-            # method が Enum なら .value で文字列を取得、文字列なら小文字化して利用
-            if hasattr(method, "value"):
-                method_key = method.value
-            elif isinstance(method, str):
-                method_key = method.lower()
-            else:
-                raise ValueError("類似度計算方式は Enum または文字列で指定してください。")
-            # 指定された類似度計算方式に対応する関数が存在するかチェック
+    def search(self, query: np.ndarray, top_k: int = 1, sim_method: str = None):
+        with self.__class__._lock:
+            if query.shape != (self.dim,):
+                raise ValueError(f"Query vector must have shape ({self.dim},).")
+            num_vectors = len(self)
+            if num_vectors == 0:
+                return []
+            method = sim_method if sim_method is not None else self.sim_method
+            method_key = method.lower()
             if method_key not in SIM_METHODS:
-                raise ValueError(f"未対応の類似度計算方式です: {method}")
-            # 対応する計算関数を取得
-            calc_func = SIM_METHODS[method_key]
-            # 全ベクトルとクエリベクトルとの類似度スコアを計算
-            scores = calc_func(self._vectors, query_vector)
-            # 上位 top_k 件の結果を抽出
-            if top_k >= scores.shape[0]:
-                top_indices = np.argsort(-scores)
-            else:
-                # argpartition でトップ k 番目までを一度抽出し、そこからスコア順に並べ替え
-                top_indices = np.argpartition(-scores, top_k)[:top_k]
-                top_indices = top_indices[np.argsort(-scores[top_indices])]
-            # インデックスからキーへの変換用辞書を作成
-            index_to_key = {index: k for k, index in self._key_to_index.items()}
+                raise ValueError(f"Unsupported similarity method: {method}")
+            fun = SIM_METHODS[method_key]
+            data = self.vectors[:num_vectors]
+            scores = fun(data, query.astype(self.dtype))
+            sorted_indices = np.argsort(-scores)[:top_k]
             results = []
-            # 上位結果からキー、スコア、メタデータ、ベクトルを抽出
-            for idx in top_indices:
-                key = index_to_key.get(idx)
-                if key is not None:
-                    results.append((key, float(scores[idx]), self._vectors[idx], self._metadata.get(key)))
-            return results
+            for i in sorted_indices:
+                key = str(i + 1)
+                results.append((key, float(scores[i]), self.vectors[i].copy(), self.metadata.get(key)))
+
+        return results
 
     def update_vector(self, key: str, new_vector: np.ndarray, new_metadata: dict = None):
-        """
-        指定されたキーに対応するベクトルを更新する。
-        
-        引数:
-          key (str): 更新対象のベクトルのキー
-          new_vector (np.ndarray): 新しいベクトル (形状は (dim,) である必要がある)
-          new_metadata (dict, オプション): 新しいメタデータ（指定されていれば更新）
-
-        例外:
-          - キーが存在しない場合、KeyError を送出
-          - ベクトルの次元が一致しない場合、ValueError を送出
-        """
-        with self._lock:
-            if key not in self._key_to_index:
-                raise KeyError(f"キー {key} は存在しません。")
+        with self.__class__._lock:
+            idx = int(key) - 1
+            num_vectors = len(self)
+            if idx < 0 or idx >= num_vectors:
+                raise KeyError(f"Key {key} does not exist.")
             if new_vector.shape != (self.dim,):
-                raise ValueError(f"新しいベクトルの次元は ({self.dim},) である必要があります。")
-            # キーに対応するインデックスを取得して更新
-            index = self._key_to_index[key]
-            self._vectors[index, :] = new_vector
-            # 新たにメタデータが指定された場合、更新
+                raise ValueError(f"New vector must have shape ({self.dim},).")
+            self.vectors[idx] = new_vector.astype(self.dtype)
             if new_metadata is not None:
-                self._metadata[key] = new_metadata
+                self.metadata[key] = new_metadata
+            self._update_shared_metadata()
+
 
     def filter_by_metadata(self, conditions=None) -> list:
-        """
-        メタデータに基づいてキーをフィルタリングします。
-
-        パラメータ conditions には以下のいずれかを指定できます:
-         - 辞書形式の場合:
-             各 metadata の値が、辞書に記載されたキーと一致する場合に True と判断します。
-             例: {"map_file": "room-layout.svg"} なら metadata["map_file"] == "room-layout.svg" をチェック。
-         - コールバック関数の場合:
-             条件判定用の関数を渡すと、各 metadata をその関数に渡して True を返すアイテムをフィルタします。
-             例: lambda meta: meta.get("score", 0) >= 50
-
-        :param conditions: 辞書 または callable を指定
-        :return: 条件に合致するアイテムのキーのリスト
-        :raises TypeError: conditions が辞書でもコールバックでもない場合
-        """
-        with self._lock:
+        with self.__class__._lock:
             if conditions is None:
                 return []
-            if callable(conditions):
-                # コールバック関数として評価
-                return [key for key, meta in self._metadata.items() if conditions(meta)]
-            elif isinstance(conditions, dict):
-                # 辞書に基づく単純等価比較
-                return [key for key, meta in self._metadata.items()
-                        if all(meta.get(k) == v for k, v in conditions.items())]
-            else:
-                raise TypeError("conditions には辞書または callable を指定してください。")
+            filtered = []
+            for key, meta in self.metadata.items():
+                if key == "params":
+                    continue
+                if callable(conditions):
+                    if conditions(meta):
+                        filtered.append(key)
+                elif isinstance(conditions, dict):
+                    if all(meta.get(k) == v for k, v in conditions.items()):
+                        filtered.append(key)
+                else:
+                    raise TypeError("conditions must be a dict or callable.")
+
+        return filtered
 
     def delete(self, key: str):
-        """
-        指定されたキーに対応するベクトルとそのメタデータを削除する。
+        with self.__class__._lock:
+            # 1) キー→インデックス変換＆存在チェック
+            idx = int(key) - 1
+            count = len(self)
+            if idx < 0 or idx >= count:
+                raise KeyError(f"Key {key} does not exist.")
 
-        引数:
-          key (str): 削除する対象のベクトルのキー
+            # 2) vectors を前に詰める（in-place シフト）
+            for i in range(idx, count - 1):
+                self.vectors[i] = self.vectors[i + 1]
+            # 空いた最後の行はゼロクリア
+            self.vectors[count - 1].fill(0)
 
-        例外:
-          - キーが存在しない場合、KeyError を送出
-        """
-        with self._lock:
-            if key not in self._key_to_index:
-                raise KeyError(f"キー {key} は存在しません。")
-            # 削除対象のインデックスを取得
-            del_index = self._key_to_index[key]
-            # NumPy の delete を利用して、対象の行を削除
-            self._vectors = np.delete(self._vectors, del_index, axis=0)
-            # メタデータおよびキー-インデックスの対応から削除
-            del self._metadata[key]
-            del self._key_to_index[key]
-            # インデックスの再構築: 削除によりシフトするため、全体を更新
-            new_mapping = {}
-            for new_index, existing_key in enumerate(self._key_to_index.keys()):
-                new_mapping[existing_key] = new_index
-            self._key_to_index = new_mapping
+            # 3) metadata を再構築
+            old_meta = self.metadata
+            new_meta = {
+                "params": copy.deepcopy(old_meta["params"]),
+            }
+            new_idx = 0
+            # 数値キーのみ再割り当て
+            for old_key, val in old_meta.items():
+                if old_key in ("params", "count"):
+                    continue
+                if int(old_key) == idx + 1:
+                    # 削除対象はスキップ
+                    continue
+                new_idx += 1
+                new_meta[str(new_idx)] = val
+
+            # 4) metadata を書き戻し
+            self.metadata = new_meta
+            self._update_shared_metadata()
+
 
     def delete_keys(self, keys: list) -> list:
-        """
-        渡されたキー一覧に対して、一括で削除を実施します。
-        _vectors から該当行をまとめて削除し、_metadata および _key_to_index の状態を再構築します。
-        
-        :param keys: 削除対象のキーのリスト
-        :return: 実際に削除されたキーのリスト
-        """
-        with self._lock:
-            # 有効なキーのみ抽出
-            valid_keys = [key for key in keys if key in self._metadata]
-            if not valid_keys:
-                return []
-            
-            # 削除する各キーに対応するインデックスを取得
-            indices_to_delete = [self._key_to_index[key] for key in valid_keys]
-            # 削除時にインデックスのずれが起こらないよう、降順にソート
-            sorted_indices = sorted(indices_to_delete, reverse=True)
-            
-            # np.delete を使って _vectors から該当行を一括削除
-            self._vectors = np.delete(self._vectors, sorted_indices, axis=0)
-            
-            # _metadata と _key_to_index から対象キーを削除
-            for key in valid_keys:
-                del self._metadata[key]
-                del self._key_to_index[key]
-            
-            # 残ったアイテムの順序が _vectors の行順と合致するよう、_key_to_index を再構築
-            new_mapping = {}
-            for new_index, key in enumerate(list(self._key_to_index.keys())):
-                new_mapping[key] = new_index
-            self._key_to_index = new_mapping
-            
-            return valid_keys
+        # 1) キー→0-indexed インデックスのセット
+        try:
+            del_idxs = {int(k) - 1 for k in keys}
+        except ValueError:
+            raise KeyError("キーはすべて 1-indexed の数値文字列である必要があります．")
+
+        with self.__class__._lock:
+            count = len(self)
+            # 範囲チェック
+            if any(idx < 0 or idx >= count for idx in del_idxs):
+                raise KeyError(f"存在しないキーがあります: {keys}")
+
+            # 2) 残すインデックスリストを作成
+            keep_idxs = [i for i in range(count) if i not in del_idxs]
+            new_count = len(keep_idxs)
+
+            # 3) vectors を in-place で前詰め
+            for new_i, old_i in enumerate(keep_idxs):
+                self.vectors[new_i] = self.vectors[old_i]
+            # 空いた後半部分はゼロクリア
+            for i in range(new_count, count):
+                self.vectors[i].fill(0)
+
+            # 4) metadata を再構築
+            old_meta = self.metadata
+            new_meta = {
+                "params": copy.deepcopy(old_meta["params"]),
+            }
+            for new_i, old_i in enumerate(keep_idxs):
+                new_meta[str(new_i + 1)] = old_meta[str(old_i + 1)]
+
+            # 5) 書き戻し
+            self.metadata = new_meta
+            self._update_shared_metadata()
+        return keys
 
     def clear(self):
-        """
-        タンク内のすべてのベクトル、メタデータ、キー対応情報を初期化する。
-        自動採番用のカウンタもリセットする。
-        """
-        with self._lock:
-            # 空の配列にしてベクトルをリセット
-            self._vectors = np.empty((0, self.dim), dtype=self.dtype)
-            # メタデータとキーの対応情報をクリア
-            self._metadata.clear()
-            self._key_to_index.clear()
-            self._auto_id = 0
+        with self.__class__._lock:
+            self.vectors.fill(0)
+            params = copy.deepcopy(self.metadata.get("params", {}))
+            self.metadata.clear()
+            self.metadata["params"] = params
+            self._update_shared_metadata()
 
-    def save_to_file(self):
+    def save(self):
         """
-        データ永続化用に、ベクトルとメタデータをファイルに保存する。
-        
-        保存するファイル:
-          - ベクトル情報は NumPy の npz 形式で保存
-          - メタデータ、キー、採番カウンタは pickle 形式で保存
-          
-        ※ persist フラグが False の場合は何も行わない。
+        ベクトルデータとメタデータをファイルに保存します。
+        永続化モードが有効な場合にのみ動作し、store_dir 内に
+          ・ {tank_name}.npz  … 有効なベクトルデータ（_num_vectors 件分）
+          ・ {tank_name}.pkl  … メタデータ
+        として保存します。
         """
-        if not self.persist:
+        save_cmd = f"save,{self.tank_name}"
+        if not VecTank.send_command_to_store(save_cmd, store_name=self.store_name):
+            print("[ERROR] TankStore did not acknowledge tank save.")
             return
-        with self._lock:
-            # 保存ファイル名は persistence_path と tank_name を連結して決定
-            vectors_file = f"{self.persistence_path}_{self.tank_name}_vectors.npz"
-            # NumPy 形式でベクトル群を保存
-            np.savez(vectors_file, vectors=self._vectors)
-            # メタデータ関連情報をまとめた辞書を作成
-            meta_data = {
-                "metadata": self._metadata,
-                "key_to_index": self._key_to_index,
-                "auto_id": self._auto_id
-            }
-            meta_file = f"{self.persistence_path}_{self.tank_name}_meta.pkl"
-            # pickle を利用してメタデータを保存
-            with open(meta_file, "wb") as f:
-                pickle.dump(meta_data, f)
+        pass
+    
+    def out_log(self, message: str = None):
+        """
+        タンクの状態をログに出力します。
+        """
+        log_cmd = f"log,{self.tank_name},{message if message else ''}"
+        if not VecTank.send_command_to_store(log_cmd, store_name=self.store_name):
+            print("[ERROR] TankStore did not acknowledge tank log.")
+            return
+        pass
 
-    def load_from_file(self):
-        """
-        永続化フラグが有効な場合、既存の永続化ファイルから、ベクトルとメタデータをロードする。
+    def close(self):
+        try:
+            self.shm.close()
+            self.meta_shm.close()
+        except Exception:
+            pass
 
-        処理内容:
-          - 該当するベクトルファイルとメタデータファイルが存在するか確認し、
-            存在する場合にそれらを読み込む。
-        """
-        if not self.persist:
-            return
-        vectors_file = f"{self.persistence_path}_{self.tank_name}_vectors.npz"
-        meta_file = f"{self.persistence_path}_{self.tank_name}_meta.pkl"
-        # 両方のファイルが存在しなければ何もしない
-        if not os.path.exists(vectors_file) or not os.path.exists(meta_file):
-            return
-        with self._lock:
-            # NumPy 形式のファイルからベクトル群をロード
-            data = np.load(vectors_file)
-            self._vectors = data["vectors"]
-            # pickle 形式のファイルからメタデータ等をロード
-            with open(meta_file, "rb") as f:
-                meta_data = pickle.load(f)
-                self._metadata = meta_data.get("metadata", {})
-                self._key_to_index = meta_data.get("key_to_index", {})
-                self._auto_id = meta_data.get("auto_id", 0)
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
+
+    def __len__(self):
+        return len(self.metadata.keys()) - 1  # "params" を除外
+
+    def __str__(self):
+        # return f"VecTank({json.dumps(self.metadata.get("params", {}), indent=2)},\nlen={len(self)})"
+        return f"VecTank({self.tank_name}, dim={self.dim}, max_capacity={self.max_capacity}, len={len(self)}, persist={self.persist}, sim_method={self.sim_method})"
+
+
+# ----------------------------------------------------------------------
+# 動作確認用サンプルコード（単体テスト）
+# ----------------------------------------------------------------------
+if __name__ == '__main__':
+    import os
+    import numpy as np
+    import time
+
+    print("=== VecTank 動作確認 ===")
+
+    # create_tank を用いて "test_tank" を生成
+    tank = VecTank.create_tank("test_tank", dim=3, persist=True)
+    if tank is None:
+        print("[ERROR] TankStore によるタンク生成に失敗しました。")
+        os._exit(1)
+    else:
+        print("Created Tank:", tank)
+
+    # 単一ベクトル追加
+    vec = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    key1 = tank.add_vector(vec, {"info": "first vector"})
+    print(f"[DEBUG] Added vector key: {key1}")
+    tank.out_log("Added first vector")
+
+    # 複数ベクトル一括追加
+    vectors = np.array([[4.0, 5.0, 6.0],
+                        [7.0, 8.0, 9.0]], dtype=np.float32)
+    keys = tank.add_vectors(vectors, [{"info": "second vector"}, {"info": "third vector"}])
+    print(f"[DEBUG] Added vector keys: {keys}")
+    tank.out_log("Added second and third vectors")
+
+    # 類似度検索（デフォルトは COSINE）
+    query = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    results = tank.search(query, top_k=2)
+    print(f"[DEBUG] Search results: {results}")
+
+    # update_vector のテスト：1番目のベクトルを更新
+    tank.update_vector(key1, np.array([9.0, 8.0, 7.0], dtype=np.float32), {"info": "updated first vector"})
+    results_after_update = tank.search(np.array([9.0, 8.0, 7.0], dtype=np.float32), top_k=1)
+    print(f"[DEBUG] Search after update: {results_after_update}")
+    tank.out_log("Updated first vector")
+
+    # filter_by_metadata テスト：メタデータに "updated" が含まれるものを抽出
+    filtered_keys = tank.filter_by_metadata(lambda meta: "updated" in meta.get("info", ""))
+    print(f"[DEBUG] Filtered keys: {filtered_keys}")
+
+    # delete_keys テスト：追加したすべてのベクトルを削除
+    all_keys = [key1] + keys
+    deleted_keys = tank.delete_keys(all_keys)
+    print(f"[DEBUG] Deleted keys: {deleted_keys}")
+    print(f"[DEBUG] Vector count after deletion: {len(tank)}")
+    tank.out_log("Deleted all vectors")
+
+    # 再度ベクトル追加して clear の動作確認
+    tank.add_vector(np.array([10.0, 20.0, 30.0], dtype=np.float32), {"info": "new vector"})
+    tank.out_log("Added new vector")
+    print(f"[DEBUG] Vector count before clear: {len(tank)}")
+    tank.clear()
+    print(f"[DEBUG] Vector count after clear: {len(tank)}")
+    tank.out_log("Cleared all vectors")
+
+    # 永続化のテスト（save() は空実装）
+    tank.add_vector(np.array([5.0, 5.0, 5.0], dtype=np.float32), {"info": "persisted vector"})
+    tank.out_log("Added vector for persistence test")
+    tank.save()
+    print("[DEBUG] Tank saved successfully.")
+    print("[DEBUG] Tank :", str(tank))
+    print("=== VecTank 動作確認完了 ===")
+    tank.close()
