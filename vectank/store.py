@@ -214,7 +214,7 @@ class TankStore:
                         print(f"[DEBUG] Tank: {str(tank)}")
                 # コマンド処理後、共有バッファをクリア（全0に戻す）＝Ack とする
                 self._comm_buffer.fill(0)
-            time.sleep(0.1)
+            time.sleep(0.01)
 
     def stop_event_loop(self):
         """

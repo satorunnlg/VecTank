@@ -175,7 +175,7 @@ class VecTank:
                     print("[DEBUG] Acknowledgment received from TankStore.")
                     comm_shm.close()
                     return True
-                time.sleep(0.1)
+                time.sleep(0.01)
             print("[ERROR] Acknowledgment not received within timeout.")
             comm_shm.close()
         return False
