@@ -230,21 +230,19 @@ class VecTank:
             self._update_shared_metadata()
         return key
 
-    def add_vectors(self, vectors: np.ndarray, metadata_list: list, keys: list = None) -> list:
+    def add_vectors(self, vectors: np.ndarray, metadata_list: list) -> list:
         with self.__class__._lock:
             n = vectors.shape[0]
             if vectors.shape[1] != self.dim:
                 raise ValueError(f"Each vector must have {self.dim} dimensions.")
             if len(metadata_list) != n:
                 raise ValueError("Length of metadata_list must match number of vectors.")
-            if keys is not None and len(keys) != n:
-                raise ValueError("Length of keys must match number of vectors.")
             new_keys = []
             num_vectors = len(self)
             if num_vectors + n > self.max_capacity:
                 raise MemoryError("Adding vectors exceeds capacity.")
             for i in range(n):
-                key = str(num_vectors + i + 1) if keys is None else str(keys[i])
+                key = str(num_vectors + i + 1)
                 vec = vectors[i].astype(self.dtype, copy=False)
                 self.vectors[num_vectors + i, :] = vec
                 self.metadata[key] = metadata_list[i]
@@ -252,6 +250,13 @@ class VecTank:
             self._update_shared_metadata()
 
         return new_keys
+
+    def get(self, key: str):
+        with self.__class__._lock:
+            idx = int(key) - 1
+            results = (key, self.vectors[idx].copy(), self.metadata.get(key))
+
+        return results
 
     def search(self, query: np.ndarray, top_k: int = 1, sim_method: str = None):
         with self.__class__._lock:
